@@ -1,0 +1,988 @@
+---
+title: "Own-source revenue for pension stress tests"
+author: "Don Boyd"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    df_print: paged
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include=FALSE)
+options(width = 150)
+```
+
+
+```{r globals}
+
+```
+
+
+```{r libraries, include=FALSE}
+source(here::here("include", "libraries.r"))
+devtools::session_info()
+```
+
+
+# NJ forecast
+
+Note: All amounts are in $ billions, nominal, unless noted otherwise.
+
+```{r getdata}
+combo <- readRDS(here::here("data", "combo.rds"))
+
+
+combotab <- combo %>%
+  group_by(fullname) %>%
+  summarise(n=n(),
+            n_notNA=sum(!is.na(value)),
+            first_year=min(year),
+            last_year=max(year),
+            nyears=last_year - first_year + 1,
+            nstates=length(unique(stabbr)),
+            nus=sum(stabbr=="US", na.rm = TRUE),
+            nnj=sum(stabbr=="NJ", na.rm = TRUE),
+            minval=min(value, na.rm=TRUE),
+            maxval=max(value, na.rm=TRUE)) %>%
+  select(fullname, n, n_notNA, nyears, everything())
+combotab
+
+```
+
+
+```{r splice_fn}
+splice_hf <- function(history, forecast, firstyear=NULL){
+  # takes two dataframes, each with year and value
+  # define first year as the maximum year in history, plus 1
+  firstyear <- max(history$year)
+  df <- tibble(year=min(history$year):max(forecast$year)) %>%
+    left_join(history %>% select(year, h=value), by="year") %>%
+    left_join(forecast %>% select(year, f=value), by="year") %>%
+    mutate(ratio=case_when(year < firstyear ~ 1,
+                           year == firstyear ~ 1,
+                           year > firstyear ~ f / f[match(year - 1, year)],
+                           TRUE ~ NA_real_),
+           cratio=cumprod(ratio),
+           value=ifelse(year <= firstyear, h, h[year==firstyear] * cratio))
+  df %>%
+    select(year, h, f, value)
+}
+
+splice_hf(h, f)
+
+history <- h
+forecast <- f
+
+h <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="nipa") %>%
+  select(year, value)
+
+f <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="cbo_jul2020") %>%
+  select(year, value)
+
+
+```
+
+
+## Splice national GDP data
+```{r}
+# get spliced nominal gdp forecasts for major forecasts
+combotab
+gdph <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="nipa") %>%
+  select(year, value)
+
+gdpprior <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="cbo_precovid") %>%
+  select(year, value)
+
+# let our baseline forecast be CBO
+gdpbase <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="cbo_jul2020") %>%
+  select(year, value)
+
+gdpfedalt <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="fed_alt") %>%
+  select(year, value)
+
+gdpmoody <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="moodys_jul2020p50") %>%
+  select(year, value)
+
+
+gdpprior_fc <- splice_hf(gdph, gdpprior)
+gdpbase_fc <- splice_hf(gdph, gdpbase)
+gdpfedalt_fc <- splice_hf(gdph, gdpfedalt)
+gdpmoody_fc <- splice_hf(gdph, gdpmoody)
+
+
+gdp <- bind_rows(gdpprior_fc %>% select(year, value) %>% mutate(type="cboprior"),
+                 gdpbase_fc %>% select(year, value) %>% mutate(type="cbojul"),
+                 gdpfedalt_fc %>% select(year, value) %>% mutate(type="fedalt"),
+                 gdpmoody_fc %>% select(year, value) %>% mutate(type="moodyjul"))
+
+gdp %>%
+  filter(year >= 2015) %>%
+  ggplot(aes(year, value, colour=type)) +
+  geom_line() +
+  geom_point()
+
+
+```
+
+
+
+## Splice NJ GDP data
+
+
+## Splice NJ tax data
+
+
+## Prepare tax forecast
+
+
+
+# Appendix
+
+```{r ONETIME_combine_njus_data}
+# get previously constructed data
+# year, stabbr, name, src, fullname, value
+
+usgdphist_fy <- readRDS(here::here("data", "usgdphist.rds"))
+
+usgdp_fy <- readRDS(here::here("data", "usgdpfc.rds"))
+summary(usgdp_fy)
+
+njgdp_fy <- readRDS(here::here("data", "njgdp_fy.rds"))
+summary(njgdp_fy) # 1977-2051 gdp_moodys_dec2019 and gdp_moodys_jul2020, nominal, $ billions
+count(njgdp_fy, fullname)
+#   fullname               n
+#   <chr>              <int>
+# 1 gdp_moodys_dec2019    75
+# 2 gdp_moodys_jul2020    75
+
+osrcen <- readRDS(here::here("data", "osr_census_updated.rds")) # 1942-2020, nominal $ thousands
+summary(osrcen)
+count(osrcen, fullname)
+#   <chr>           <int>
+# 1 cit_census         63
+# 2 gst_census         63
+# 3 iit_census         63
+# 4 nontax_census      63
+# 5 osr_census         63
+# 6 othertax_census    63
+# 7 tottax_census      63
+
+njtaxcafr <- readRDS(here::here("data", "njtaxcafr.rds"))  # 2010-2019, nominal $ millions
+count(njtaxcafr, fullname)
+#   fullname               n
+#   <chr>              <int>
+# 1 cit_NJCAFRs           10
+# 2 iit_NJCAFRs           10
+# 3 lottery_NJCAFRs       10
+# 4 othertax_NJCAFRs      10
+# 5 sut_NJCAFRs           10
+# 6 taxlottery_NJCAFRs    10
+# 7 taxtot_NJCAFRs        10
+
+njfc <- readRDS(here::here("data", "njgov_forecasts.rds")) # nominal $ thousands
+summary(njfc)
+
+uscg <- readRDS(here::here("data", "uscapgains.rds")) # capgains_CBO_sep2020 and capgains_lagged_CBO_sep2020, nominal billions
+summary(uscg) # one NA, for lagged
+
+
+stcg <- readRDS(here::here("data", "statecapgains.rds")) # $ thousands, nominal
+summary(stcg) # 2012-2018
+stcg %>% filter(stabbr=="NJ")
+
+# osr_long <- readRDS(here::here("data", "osr_census.rds")) # 1942-2018, nominal $ millions, 2018 still latest as of 12/28/2020
+# summary(osr_long)
+# count(osr_long, fullname)
+
+combo <- bind_rows(usgdphist_fy %>% mutate(value=value / 1e3),
+                   usgdp_fy,
+                   njgdp_fy,
+                   osrcen %>% mutate(value=value / 1e6),
+                   njtaxcafr %>% mutate(value=value / 1e3),
+                   njfc %>% mutate(value=value / 1e6),
+                   uscg,
+                   stcg %>% filter(stabbr %in% c("US", "NJ")) %>% mutate(value=value / 1e6)) %>%
+  filter(year >= 1990)
+
+combo
+
+saveRDS(combo, here::here("data", "combo.rds"))
+
+```
+
+
+```{r ONETIME_usgdp_history, eval=FALSE}
+comment(nipa) # NIPA data all tables, Annual, quarterly, and monthly, latest item released: 2020-12-22
+getNIPATable("1.1.5") # nominal gdp
+# A191RC nominal gdp, Gross domestic product, Current Dollars, Level 
+# A191RX real gdp, Gross domestic product, Chained Dollars, Level
+
+nipa %>%
+  filter(str_detect(vdesc, "Gross domestic product"), freq=="Q") %>%
+  select(vname, vdesc) %>%
+  distinct()
+
+# create fiscal year real and nominal gdp
+gdpdata <- nipa %>%
+  filter(vname %in% c("A191RC", "A191RX"), freq=="Q") 
+summary(gdpdata) # jas 2020 quarter is latest
+
+gdphist <- gdpdata %>%
+  filter(date < "2020-07-01") %>%
+  mutate(year=ifelse(month(date) > 6, year(date) + 1, year(date))) %>%
+  group_by(year, vname) %>%
+  summarise(value=mean(value), .groups="drop") %>%
+  mutate(name=case_when(vname=="A191RC" ~ "gdp",
+                        vname=="A191RX" ~ "rgdp",
+                        TRUE ~ "ERROR")) %>%
+  select(year, name, value) %>%
+  pivot_wider() %>%
+  mutate(pgdp=gdp / rgdp) %>%
+  pivot_longer(cols=-c(year)) %>%
+  mutate(stabbr="US",
+         src="nipa",
+         fullname=paste0(name, "_", src))
+           
+saveRDS(gdphist, here::here("data", "usgdphist.rds"))
+
+```
+
+
+
+```{r ONETIME_usgdpfc, eval=FALSE}
+# get Moody's and CBO gdp forecasts and splice
+gdpfn <- "GDP MASTER FILE_20201021.xlsx"
+vnames <- c("cbo_precovid", "cbo_jul2020", "moodys_jul2020p50", "lena_fed", "fed_alt")
+
+sfy <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", range="A3:A14", col_names = "year")
+# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
+# moodys_jul2020
+ngdp <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", 
+                   range="G3:K14", col_names=vnames)
+# keep only the FY values, not the Q2 values
+ngdp_fy <- tibble(sfy, ngdp) %>%
+  mutate(stabbr="US",
+         name="gdp") %>%
+  pivot_longer(-c(year, name, stabbr), names_to = "src") %>%
+  mutate(fullname=paste0(name, "_", src))
+ngdp_fy
+
+# now get real also, in case we need it Real GDP 
+sfy <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", range="A3:A14", col_names = "year")
+# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
+# moodys_jul2020
+rgdp <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="Real GDP", 
+                   range="G3:K14", col_names=vnames)
+# keep only the FY values, not the Q2 values
+rgdp_fy <- tibble(sfy, rgdp) %>%
+  mutate(stabbr="US",
+         name="rgdp") %>%
+  pivot_longer(-c(year, name, stabbr), names_to = "src") %>%
+  mutate(fullname=paste0(name, "_", src))
+rgdp_fy
+
+stack <- bind_rows(ngdp_fy, rgdp_fy) %>%
+  filter(!is.na(value))
+saveRDS(stack, here::here("data", "usgdpfc.rds"))
+
+```
+
+
+```{r ONETIME_nj_gdp, eval=FALSE}
+# Moody's nominal state gdp forecasts to 2050q4 SAAR, $ billions
+fn <- "Moody's NJ GSP forecasts.xlsx"
+# NJ GSP forecast -- Dec 2019
+# NJ GSP Forecast -- Jul 2020
+s1 <- read_excel(here::here("ignore", "NJ", fn),
+                 sheet="NJ GSP forecast -- Dec 2019",
+                 range="A6:B301",
+                 col_names=c("date", "value")) %>%
+  mutate(name="gdp",
+         src="moodys_dec2019")
+ht(s1)
+
+s2 <- read_excel(here::here("ignore", "NJ", fn),
+                 sheet="NJ GSP Forecast -- Jul 2020",
+                 range="A6:B301",
+                 col_names=c("date", "value")) %>%
+  mutate(name="gdp",
+         src="moodys_jul2020")
+
+df <- bind_rows(s1, s2) %>%
+  mutate(date=yq(date),
+         stabbr="NJ",
+         fullname=paste0(name, "_", src))
+ht(df)
+saveRDS(df, here::here("data", "njgdp_q.rds"))
+
+df2 <- df %>%
+  mutate(year=ifelse(month(date) > 6,
+                     year(date) + 1,
+                     year(date))) %>%
+  group_by(year, stabbr, name, src, fullname) %>%
+  summarise(value=mean(value, na.rm=TRUE),
+            .groups="drop")
+df2
+saveRDS(df2, here::here("data", "njgdp_fy.rds"))
+
+# df %>%
+#   filter(year(date)>=2015, year(date)<=2025) %>%
+#   ggplot(aes(date, value, colour=type)) +
+#   geom_point() +
+#   geom_line()
+# 
+# df %>%
+#   filter(year(date)>=2017, year(date)<=2030) %>%
+#   mutate(ivalue=value / value[date=="2019-10-01"] * 100) %>%
+#   ggplot(aes(date, ivalue, colour=type)) +
+#   geom_point() +
+#   geom_line()
+# 
+# df %>%
+#   group_by(type, quarter(date)) %>%
+#   arrange(date) %>%
+#   mutate(pchya=value / value[match(year(date) - 1, year(date))] * 100 - 100) %>%
+#   ungroup %>%
+#   filter(year(date)>=2017, year(date)<=2030) %>%
+#   ggplot(aes(date, pchya, colour=type)) +
+#   geom_point() +
+#   geom_line() +
+#   geom_hline(yintercept = 0) +
+#   scale_y_continuous(breaks=seq(-20, 20, 1))
+
+```
+
+
+```{r ONETIME_uscapgains, eval=FALSE}
+fn <- "Boyd NJ OSR(3).xlsx"
+df <- read_excel(here::here("ignore", "NJ", fn), sheet="capgains")
+capgains <- df %>%
+  select(year, capgains=cbospliced) %>%
+  arrange(year) %>%
+  mutate(capgains_lagged=lag(capgains)) %>%
+  pivot_longer(-c(year)) %>%
+  mutate(src="CBO_sep2020",
+         fullname=paste0(name, "_", src))
+ht(capgains)
+saveRDS(capgains, here::here("data", "uscapgains.rds"))
+
+```
+
+
+
+```{r ONETIME_state_capgains, eval=FALSE}
+ht2 <- readRDS(here::here("data", "ht2.rds"))
+ht2
+capgains_state <- ht2 %>%
+  filter(agi_stub==0) %>%
+  select(year, stabbr, value=a01000) %>%
+  mutate(name="capgains",
+         src="SOI_HT2",
+         fullname=paste0(name, "_", src))
+
+# capgains_state %>%
+#   filter(agi_stub==0, stabbr %in% c("NJ", "NY", "US", "CT")) %>%
+#   ggplot(aes(year, cgpchya, colour=stabbr)) +
+#   geom_line() +
+#   geom_point()
+saveRDS(capgains_state, here::here("data", "statecapgains.rds"))
+
+
+```
+
+
+```{r ONETIME_censusOSR, eval=FALSE}
+tmp <- count(slgfin, aggvar)
+
+vars <- c("osr", "tottax", "gst", "iit", "cit")
+osr <- slgfin %>%
+  filter(stabbr=="NJ", level==2, aggvar %in% vars) %>%
+  select(stabbr, year, aggvar, value) %>%
+  pivot_wider(names_from = aggvar) %>%
+  mutate(nontax=osr - tottax,
+         othertax=tottax - naz(iit) - naz(gst) - naz(cit)) %>%
+  arrange(year)
+ht(osr)
+summary(osr)
+
+osr_long <- osr %>%
+  pivot_longer(cols=-c(year, stabbr)) %>%
+  mutate(src="census",
+         fullname=paste0(name, "_", src))
+
+saveRDS(osr_long, here::here("data", "osr_census.rds"))
+
+```
+
+
+```{r ONETIME_qtax_nj_growth, eval=FALSE}
+# use this to help update osr
+df <- qtax %>%
+  filter(stabbr=="NJ", vname %in% c("gst", "iit", "cit", "tottax")) %>%
+  select(date, stabbr, name=vname, value) %>%
+  mutate(year=ifelse(month(date) > 6,
+                     year(date) + 1,
+                     year(date))) %>%
+  group_by(year, stabbr, name) %>%
+  summarise(value=mean(value, na.rm=TRUE),
+            .groups="drop") %>%
+  pivot_wider() %>%
+  mutate(othertax=tottax - naz(cit) - naz(iit) - naz(gst)) %>%
+  pivot_longer(-c(year, stabbr))
+count(df, name)
+ht(df)
+
+growth <- df %>%
+  filter(year >= 2016) %>%
+  group_by(stabbr, name) %>%
+  arrange(year) %>%
+  mutate(ratio=value / lag(value)) %>%
+  ungroup %>%
+  filter(year>=2017) %>%
+  mutate(src="census",
+         fullname=paste0(name, "_", src))
+
+saveRDS(growth, here::here("data", "tax_growth.rds"))
+
+  
+```
+
+
+```{r ONETIME_OSRupdated, eval=FALSE}
+# take osr history through 2018
+# estimate 2019 and 2020 using:
+#   fy growth rates for taxes from qtax data
+#   fy growth rates for nontax from Moody's july 2020 state gdp
+
+osrhist <- readRDS(here::here("data", "osr_census.rds"))
+
+taxgrowth <- readRDS(here::here("data", "tax_growth.rds")) %>%
+  filter(year >= 2018, name != "tottax")
+
+nontaxgrowth <- tibble(year=c(2019, 2020, 2021),
+                       ratio=c(1.041, 0.999, 1 - .041),
+                       name="nontax",
+                       stabbr="NJ",
+                       src="census",
+                       fullname="nontax_census")
+# nj fy state gdp nominal growth rates per moody's july 2020
+# 2018 3.6
+# 2019 4.1 
+# 2020 -0.1
+# 2021 -4.1
+
+
+osrupdate <- bind_rows(osrhist, 
+                       taxgrowth %>% filter(year %in% 2019:2020),
+                       nontaxgrowth %>% filter(year %in% 2019:2020)) %>%
+  group_by(stabbr, name) %>%
+  arrange(year) %>%
+  mutate(value=ifelse(year==2019, 
+                      ratio * lag(value),
+                      value)) %>%
+  mutate(value=ifelse(year==2020, 
+                      ratio * lag(value),
+                      value)) %>%
+  ungroup %>%
+  select(-fullname, -ratio) %>%
+  pivot_wider() %>%
+  mutate(tottax=ifelse(is.na(tottax), naz(iit) + naz(gst) + naz(cit) + naz(othertax), tottax),
+         osr=ifelse(is.na(osr), tottax + nontax, osr)) %>%
+  pivot_longer(cols=-c(stabbr, year, src)) %>%
+  mutate(fullname=paste0(name, "_", src))
+
+osrupdate %>%
+  filter(year >= 2018) %>%
+  arrange(year, name)
+
+saveRDS(osrupdate, here::here("data", "osr_census_updated.rds"))
+
+```
+
+
+```{r ONETIME_njtaxcafr, eval=FALSE}
+fn <- "Boyd NJ OSR(4).xlsx"
+df <- read_excel(here::here("ignore", "NJ", fn), sheet="njtaxcafr")
+
+dfl <- df %>%
+  pivot_longer(cols=-year) %>%
+  mutate(src="NJCAFRs", fullname=paste0(name, "_", src))
+saveRDS(dfl, here::here("data", "njtaxcafr.rds"))
+
+```
+
+
+```{r ONETIME_govtaxforecasts}
+# get growth rates, apply them to census 2020
+# nj fy state gdp nominal growth rates per moody's july 2020
+# 2018 3.6
+# 2019 4.1 
+# 2020 -0.1
+# 2021 -4.1
+
+
+fn <- "Boyd NJ OSR(3).xlsx"
+df <- read_excel(here::here("ignore", "NJ", fn), sheet="njtaxforecasts")
+# compute the 2021 growth rates by tax - we will use them to grow census counterparts
+njfc <- df %>%
+  select(-c(nontax, osr)) %>%
+  pivot_longer(cols=-c(year, src)) %>%
+  mutate(fullname=paste0(name, "_", src))
+
+saveRDS(njfc, here::here("data", "njgov_forecasts.rds"))
+
+# 
+#   group_by(src, name) %>%
+#   mutate(ratio=value / value[match(year -1, year)]) %>%
+#   ungroup %>%
+#   arrange(src, name, year) %>%
+#   rename(njfc=value)
+# 
+# dfl <- df %>%
+#   pivot_longer(cols=-year) %>%
+#   mutate(src="NJCAFRs", fullname=paste0(name, "_", src))
+
+
+```
+
+
+```{r check}
+
+# get just the njfc growth ratios - give nontax the moody's gdp growth rate
+fcratio2021 <- njfc %>%
+  filter(year==2021, name %in% c("iit", "gst", "cit", "othertax", "nontax")) %>%
+  select(src, name, ratio) %>%
+  mutate(ratio=ifelse(name=="nontax", 1 - .041, ratio)) # state gdp per Moody's
+
+# now prepare to grow the census data
+osr1 <- readRDS(here::here("data", "osr_census_updated.rds")) %>%
+  select(stabbr, year, name, value) %>%
+  filter(year >= 2000)
+
+osr1 %>%
+  filter(year==2018)
+
+# create a dummy 2021 census record with 2020 values that we will apply nj growth rates to
+dummy2021 <- osr1 %>%
+  filter(year==2020, ! name %in% c("tottax", "osr")) %>%  # we'll calc tottax and osr
+  mutate(year=2021)
+
+# now compute the census-basis nj forecasts
+njfc_census <- fcratio2021 %>%
+  left_join(dummy2021) %>%
+  mutate(value=ratio * value) %>%
+  select(-ratio) %>%
+  pivot_wider() %>%
+  mutate(tottax=naz(iit) + naz(gst) + naz(cit) + naz(othertax),
+         osr=tottax + nontax) %>%
+  pivot_longer(cols=-c(stabbr, year, src))
+
+# create an expanded osr1 that has all combinations
+osrx <- expand_grid(src=unique(njfc$src), osr1)
+
+# now we have history and forecast for each forecaster  
+osr2 <- bind_rows(osrx, njfc_census)
+ht(osr2)
+
+
+var <- "osr"
+osr2 %>%
+  filter(year >= 2010, name==var) %>%
+  ggplot(aes(year, value, colour=src)) +
+  geom_line() +
+  geom_point() +
+  ggtitle(var)
+
+```
+
+
+
+```{r combine_data}
+# gdp <- readRDS(here::here("data", "njgdp_fy.rds"))
+# capgains <- readRDS(here::here("data", "uscapgains.rds"))
+# osr <- readRDS(here::here("data", "osr_census_updated.rds"))
+# njtaxcafr <- readRDS(here::here("data", "njtaxcafr.rds"))
+# 
+# 
+# njcombo <- bind_rows(gdp, 
+#                      capgains %>% mutate(stabbr="NJ"), 
+#                      osr,
+#                      njtaxcafr)
+# 
+# njcombo2 <- njcombo %>%
+#   filter(year >= 1995) %>%
+#   group_by(stabbr, name, src, fullname) %>%
+#   mutate(pchya=value / value[match(year - 1, year)] * 100 - 100) %>%
+#   ungroup
+
+```
+
+
+# Goal
+
+The goal is to have forecasts for NJ Census-defined OSR that:
+
+- are consistent with govt osr forecasts in the short term
+- are reasonably consistent with govt forecasts for 3 specific taxes in the short term: personal income tax, sales tax, and corporate business taxes
+- taper toward state GDP growth rates in the longer term, as forecasted by Moody's 
+- can be adjusted/calibrated to longer term national forecasts (e.g., CBO)
+- rely on minimal state-level economic forecasts - no detailed industrial, etc. economic forecasts available
+- use a method that can be implemented for other states
+
+This does not leave a lot of flexibility.
+
+
+# Preliminary comments, issues, and considerations:
+
+- taxes as defined by NJ for budgeting purposes, compared to taxes defined by Census:
+    + income tax - virtually identical (good)
+    + sales tax - virtually identical (good)
+    + corportate tax - reasonably close
+    + all other taxes - not so sure
+    + I show graphs below
+    
+- nontax OSR as defined by NJ for budgeting purposes, compared to nontax defined by Census:
+    + as far as I can see they do not publish forecasts of much of what Census includes
+    + there are some historical data in the CAFR, but two different measures constructed from CAFR data either (a) have significantly different amounts, vs. Census, historically, or (b) have significantly different growth patterns
+    + and they do not appear to be highly correlated with either tax revenue or state GDP
+    + thus we will make ad hoc decisions about what to do about nontax OSR
+    + I show graphs and other information below
+    
+- historical data
+    + we have annual Census tax and nontax OSR data for NJ through FY 2018
+    + we can extend Census tax data, by tax type, through 2020 using Census quarterly data, which are available through June 2020, collapsed to fiscal years (we splice the growth rates from the collapsed quarterly data onto the annual data to extend it)
+    + this can easily be extended to other states
+    + one technical issue is what to do about the delay of income tax filing for tax year 2019 from April to July; we should take that into account but I have not; if someone has time to investigate it (estimate its sizes) we could make an adjustment; since we are using OLS and Treasury forecasts for the short term, we should be able to presume they have taken this into account
+    + nontax data is harder; as noted above the CAFR-based data, which are available through 2019, aren't obviously related to tax data or GDP; I would use nominal GDP growth as a throw-up-our-hands-in-defeat approach; it might be possible to make more sense of the CAFR data if someone has time but I am not optimistic
+    + if we keep the bar this low we can extend it to other states
+
+- forecasts
+    + as noted, the NJ govt only appears to publish tax forecasts (and some limited nontax forecasts), and so we are on our own for nontax OSR in the short term
+    + as you know the NJ Office of Legislative Services has a significantly higher short-term tax forecast than does the NJ Treasury
+    + neither publishes much detail on how they reached their conclusions
+    + OLS, even though higher than Treasury, seems conservative to me in part because they can still have a bad second half of FY 2021 and hit their numbers
+    + this is consistent with some of what I'm seeing in other states
+    + still, they give us little information to allow us to choose between the two
+    
+- advice
+    + if you can, I'd produce 2 forecasts, one moderately conservative and one moderately optimistic
+    + the conservative forecast would be based on NJ Treasury in the short term and would incorporate CBO's pessimistic (I think) capital gains forecast in the middle term to help drive the income tax
+    + the optimistic forecast would be based on the OLS forecast in the short term and would incorporate a trend capital gains forecast
+    + if you can only have one forecast I'd take the average of Treasury and OLS, although personally I think OLS is likely to be more correct
+    + for individual revenue categories in the short term
+        + income tax incorporates capital gains as noted
+        + sales tax - I looked at the CBO July economic forecast but the only thing it has that might be useful for sales tax is personal consumption but the pattern is so similar to US gdp that it's not worth the work; you could drill into consumption details and try to construct a proxy for a state sales tax base (e.g, consumpion of goods and some services but not all), but then you're getting into weeds I think you did not want to get into
+        + nontax revenue grows like state gdp forever because what else can we do
+    +  for middle term I'd make the sources recover like the average of several past recessions; this raises the problem that historical data are tainted by policy responses but without a lot of work you can't address that
+    
+- the rest of this document:
+   + shows some of what I said above, with data
+   + does a simple forecast as I describe above
+
+
+# Details on the points above, with data
+
+## NJ growth in osr, tax, nontax, and gdp
+
+Here is a table of census osr, tax, and nontax amounts, in $ millions, so you can see magnitudes. Nontax is about 36% of OSR in recent years.
+
+```{r taxnontax, rows.print=20, include=TRUE}
+njcombo2 %>%
+  filter(fullname %in% c("tottax_census", "nontax_census", "osr_census")) %>%
+  filter(year >= 2000, year <= 2018) %>%
+  mutate(value = value / 1000) %>%
+  select(year, stabbr, fullname, value) %>%
+  pivot_wider(names_from=fullname) %>%
+  mutate(nontax_pct_osr=nontax_census / tottax_census * 100) %>%
+  kable(caption="Amounts in $ millions, nominal", digits=1)
+
+```
+
+
+Here is a graph of NJ Census tax, Census nontax, and gdp, nominal, % change year over year. I only show growth since 2010 because it was wild in several years before that and doesn't graph well. After the graph I show a table with a longer time period.
+
+I suppose there is a relationship between tax and nontax revenue but it's hardly positive or consistent. As we've discussed, a lot of policy action happens in nontax data and perhaps that is some of what we are seeing. For example, in 2020, when tax growth was negative, nontax was positive - perhaps they had some gimmicks that went into nontax in 2010.
+
+Realistically, I don't think you can come at this econometrically and I don't think you can even know what's in it without a lot of work. I'd just assume it grows like GDP.
+
+
+```{r taxnontax_plot, include=TRUE}
+# count(njcombo2, fullname)
+# "osr_census", 
+p <- njcombo2 %>%
+  filter(fullname %in% c("tottax_census", "nontax_census", "gdp_moodys_jul2020")) %>%
+  filter(year >= 2010, year <= 2018) %>%
+  ggplot(aes(year, pchya, colour=fullname)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(limits=c(-10, 10), breaks=seq(-20, 20, 2)) +
+  geom_hline(yintercept = 0) +
+  ggtitle("Growth in NJ revenue and GDP")
+p
+
+```
+
+Here's the promised table of growth rates over the longer term, including some wild years. Good luck finding a pattern we can make use of.
+
+```{r taxnontax_table, include=TRUE}
+
+njcombo2 %>%
+  select(year, fullname, pchya) %>%
+  filter(fullname %in% c("tottax_census", "nontax_census", "gdp_moodys_jul2020")) %>%
+  filter(year >= 1995, year <= 2018) %>%
+  pivot_wider(names_from = fullname, values_from = pchya) %>%
+  kable(caption="Growth rates", digits=1)
+
+```
+
+## Census tax vs NJ tax
+
+The source for the NJ tax data is NJ CAFRs, various years. As you can see, they are reasonably close in level and move pretty well together, the corp tax a bit less reliably so. And obviously (I think) there must be a corporate tax increase affecting the numbers.
+
+Anyway, the point is we can use the Census numbers pretty usefully.
+
+
+```{r census_cafr, include=TRUE}
+# count(njcombo2, fullname)
+iit <- c("git_NJCAFRs", "iit_census")
+gst <- c("sut_NJCAFRs", "gst_census")
+cit <- c("cbt_NJCAFRs", "cit_census")
+tot <- c("taxtot_NJCAFRs", "tottax_census")
+njcombo2 %>%
+  filter(fullname %in% c(iit, gst, cit, tot), year >= 2010) %>%
+  mutate(value=ifelse(str_detect(fullname, "census"), value / 1000, value)) %>%
+  mutate(type=case_when(fullname %in% iit ~ "income tax",
+                        fullname %in% gst ~ "sales tax",
+                        fullname %in% cit ~ "corp tax",
+                        fullname %in% tot ~ "total tax",
+                        TRUE ~ "ERROR")) %>%
+  ggplot(aes(year, value, colour=fullname)) +
+  geom_line() +
+  facet_wrap(~type, ncol=2, scales="free") +
+  scale_x_continuous(breaks=seq(2000, 2020, 2)) +
+  ggtitle("Tax amounts in $ millions")
+
+
+```
+
+## What about historical nontax revenue data?
+
+Here, we strike out. I compared Census nontax data to NJ two different ways.
+
++ Subtract tax revenue and federal revenue from total revenue in governmental funds and think of that as nontax own-source revenue
++ Subtract tax revenue and grants from total revenue of the primary government in the statement of activities (an entirely different way of measuring state finances), which Ben said he had look at. 
+
+The table below shows Census nontax OSR plus the implied OSR under these two methods, in $ millions (nominal), plus growth rates. Only compare the highlighted columns.
+
+As you can see, the second approach is closer in magnitude but neither is particularly close to Census in growth rates; the second approach looks a little better there than the first but it's not very close. Thus, my suggestion that we have this grow as the economy grows. It's either that or a deep dive to really understand this and even then I am not sure what we would do.
+
+![](C:\RPrograms PC\Pensions\Pew_Revenue_Stress\images\NJ nontax OSR.png)
+
+# Simple forecasts
+
+
+## Income tax
+
+
+## Sales tax
+
+
+## Corporate tax
+
+
+## Other taxes
+
+
+## OSR
+
+
+
+```{r explore}
+recuse <- recessions %>%
+  filter(rec_year %in% c(2001, 2007))
+
+# vars <- "cg_cbosep"
+
+fplot <- function(vars, tax){
+  title <- paste0("New Jersey ", tax, " and selected related variables, nominal")
+  njcombo2 %>%
+  filter(year>=2000, year<=2025) %>%
+  filter(fullname %in% vars) %>%
+  ggplot(aes(year, pchya, colour=fullname)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  ggtitle(title,
+          subtitle="GDP and tax are fiscal years ending in a given year, capital gains is lagged calendar year") +
+  scale_x_continuous(name=NULL, breaks=seq(2000, 2030, 2)) +
+  scale_y_continuous(name="% change vs. year ago", breaks=seq(-50, 50, 10)) +
+  geom_vline(xintercept = 2020.5, linetype="dashed") +
+    annotate("rect",
+           fill = "lightgrey",
+           alpha = 0.5, # larger alpha is darker rectangle
+           xmin = recuse$peak_decimal, xmax = recuse$trough_decimal,
+           ymin = -Inf, ymax = Inf) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+}
+
+fnvars <- c("capgains_lagged_CBO_sep2020", "gdp_moodys_jul2020", "gdp_moodys_dec2019", "iit_census")
+piit <- fplot(fnvars, "income tax")
+
+fnvars <- c("capgains_lagged_CBO_sep2020", "gdp_moodys_jul2020", "gdp_moodys_dec2019", "gst_census")
+pgst <- fplot(fnvars, "sales tax")
+
+fnvars <- c("capgains_lagged_CBO_sep2020", "gdp_moodys_jul2020", "gdp_moodys_dec2019", "cit_census")
+pcit <- fplot(fnvars, "corporate income tax")
+
+fnvars <- c("capgains_lagged_CBO_sep2020", "gdp_moodys_jul2020", "gdp_moodys_dec2019", "othertax_census")
+pothertax <- fplot(fnvars, "other taxes")
+
+
+```
+
+# A few comments on the NJ revenue forecasts
+
+*  As I read the documents, the OLS and Treasury forecasts both do not include budget actions.
+*  The main reasons that OLS is $3.7 billion higher $1.37 billion above Treasury for 2021 are: (to come)
+
+
+# Recent history for taxes, plus forecasted driving variables
+
+Tax data below are Census annual through 2018, with 2019 and 2020 updated based on growth rates in four quarters of fiscal years, 
+
+Capital gains is annual from CBO, with their forecast for ~2019+.
+
+NJ GDP data are Moody's.
+
+
+## Income tax
+
+```{r iit, include=TRUE}
+piit
+```
+
+
+## Sales tax
+
+```{r gst, include=TRUE}
+pgst
+```
+
+## Corporate income tax
+
+```{r cit, include=TRUE}
+pcit
+```
+
+
+# Other taxes
+
+```{r othertax, include=TRUE}
+pothertax
+```
+
+
+
+```{r us_gdp, eval=FALSE}
+
+```
+
+```{r fed_alt, eval=FALSE}
+fn <- "fedreserve_stress_djb.xlsx"
+hist <-  read_excel(here::here("ignore", "Federal Reserve", fn),
+                 sheet="1Ahistory", skip=3)
+base <-  read_excel(here::here("ignore", "Federal Reserve", fn),
+                 sheet="2Abaseline", skip=3)
+altsev <- read_excel(here::here("ignore", "Federal Reserve", fn),
+                 sheet="4Aaltsevere", skip=3)
+
+baseline <- bind_rows(hist, base) %>%
+  mutate(type="frb_baseline")
+
+altsevere <- bind_rows(hist, altsev) %>%
+  mutate(type="frb_altsevere")
+
+frb_raw <- bind_rows(baseline, altsevere) %>%
+  mutate(date=yq(paste0(str_sub(date, 4, 7), str_sub(date, 1, 2))))
+         
+# calculate values
+frb_vals <- frb_raw %>%
+  pivot_longer(-c(date, type)) %>%
+  mutate(qgr=(value/100+1)^.25 - 1 )
+         
+```
+
+
+
+# Greg and Kimberly notes
+
+## 2020-12-21
+We are looking forward to working with you as time allows on the project to sharpen our five-year revenue forecasts in a (now actual) downturn and recovery, with the initial focus on New Jersey.  
+
+
+In an effort to see if we can jump start the conversation, I’ve included a few high-level notes on what we’ve already discussed as well as some thoughts on how to make this as straightforward as possible.   Will follow up with something more detailed, including responses to points you raised at the end of October on New Jersey, and to complete the hand-off to Kimberly who is poised to give this more day in day out attention.
+
+
+First off, I think the general language in the contract on the revenue(*see bottom of email) works to our advantage, in terms of defining the goal in general terms supported by billable hours.  But if we need to more formally or informally document the scope of work, please let us know.   Also, note that we’ve highlighted the revenue piece in the contract for emphasis.  While we still would enjoy circling back with you on our overall scenario methodology, this is less of a priority and I think will be a straightforward exercise when the time is right.
+
+In terms of specific revenue lines, I think we are in agreement on major state sources, defined as Personal Income, Sales, and Corporate Tax revenue, as well as state fee revenue.  As discussed, capital gains within personal income is also important and the definition of fee revenue is likely to vary by state.  Note that we’ll send along something pre-existing that seems to fit this definition well in New Jersey.
+
+We also thought that it might help to clarity that although we would eventually like to document a methodology for doing this in a downturn/recovery, we don’t have any intention to publish results, at least not without your OK.  Noting this as I thought it might help to alleviate concern around generating a forecast that will differ from what the state is using.  Will make note in NJ follow-up around our thoughts on which in-state forecast might be more useful as a starting point.
+ 
+Another thought on keeping this efficient has to do with having you all review our current OSR methodology.  Initially, we were thinking of discussing this as a second step down the road.  Specifically because the more in-depth approach was designed specifically because we know that the long-run GSP to OSR relationship does not work over shorter periods of downturn and recovery.  That said, if there is value to reviewing methodology here, sooner rather than later, that would be cool with us.  I’d just re-emphasize that we are more looking for the work you all might do to help us make our methodology sharper, as opposed to the other way around or having any need to reconcile. 
+ 
+We’ll also follow up with the easiest to follow spreadsheet for the assumptions we are using, including capital market assumptions, in our downside scenario.   Two thoughts on this in the category of keeping things simple.  The first is that we don’t think it’s necessary for you all to do in depth stochastic or other analysis, really just preferring to focus on the revenue.  Related to this, we can share 1-2 documents that summarize results under the new scenarios for New Jersey based on work the Terry Group has done.
+ 
+Assuming New Jersey is the right place to start, we would still be eager to discuss other states towards the goal of developing a more general approach.  We can follow-up with more details when the time is right, with the usual note that we are more than happy to prioritize based in part of what you all think is most interesting and useful.
+
+Please let us know if you have questions.  Email 2 of 2 on this topic with some of the additional thoughts and details to follow.
+ 
+
+Thanks,
+
+Greg (and Kimberly) 
+
+*3.7. Provide consulting support in relation to economic scenarios, revenue scenarios, and stress testing to inform Pew's stress testing methodology and related materials (collectively, Pew Materials). The consulting will be focused on exploring methods to develop and apply a general framework for forecasting state-specific revenue under alternative economic scenarios, particularly recession scenarios, taking into consideration the cyclical effects of these scenarios. 
+
+
+## Boyd response 12/21
+
+I think the keys to doing the forecast from now through the point at which the cyclical short term meets up with the GSP-driven longer term are:
+
+*   How much digging to do into short-term information and analyses of that information. 
+  +   In NJ, that information told us that the short term information was better than had been expected.
+  +   Two extant analyses of that information were quite different - Treasury, perhaps because of their role as managers of the budget, taking a quite conservative view, and OLS taking a more optimistic view. Based on the numbers I looked at, it seemed like Treasury was far too pessimistic in the short term - they already were well ahead of their prior forecast.
+
+*   The tradeoff here is that:
+  +   To have any hope of being accurate, credible, and relevant in the 1-3 year forecast window, you MUST take this information into account. You can't just let some econometric or simpler model run.
+  +   It is idiosyncratic. While there are commonalities across states there can be important differences. So IF you take this important information into account, you probably will have to make some adjustments as you move from state to state, although the basic ideas will be the same.
+  +   The idiosyncracies are mostly in the data -- for example, if you want to know how taxes are performing here and now, you may have to gather state-specific monthly or quarterly data (or buy it from Urban Institute) for at least a few major taxes. I think you can probably do the gather-it-yourself approach without incurring great labor cost. But you can't be both relevant in the short term and not have these data.
+  
+*   After you have these data, and have examined available analyses, you have to decide how you want to approach the forecast task. 
+  +   If I were picking sides in NJ, I would have picked OLS - I thought they had the more reasonable evaluation of the data that were in the public domain. More investigation, or more-recent data since then, could change that. 
+If I were advising policymakers one approach could be to say, here are three forecast scenarios:
+  +   A forecast that largely follows Treasury as it wends its way from the cycle to the longer term, based on a conservative evaluation of the recent better-than-expected tax-collection news
+  +   A forecast that largely follows OLS based on their more optimistic (and reasonable I thought) evaluation of recent news
+  +   And something that follows a middle path
+
+*   Would I suggest doing something completely independent and different? Possibly. What information could you have that is newer, or better, or more plausible?
+  +   Conditions on the ground. We may now know things - mostly revenue collections - that were different from the last update I saw from OLS that says events are unfolding better or worse than expected.
+  +   Economic forecasts: New forecasts can take into account vaccines, mutation risk, etc. A new economic forecast certainly could lead us to be more or less optimistic in the 1-3 year window than Treasury or OLS.
+  +   Financial markets: Even without changing the econ forecast substantially, it is possible to have large shifts in stock market and capital gains, with big revenue impacts. So you can (almost) think about this as a separate lever for forecast and for scenarios. It's not truly separate, but the linkage can be loose. If the markets turn suddenly downward (I am regularly amazed that they have not) that would call for a separate NJ revenue scenario that could be substantially worse. Personally, I would offer that to policymakers as an alternative scenario no matter what, so they understand the downside risk.
+
+*   I did a lot of work reconciling (as best I could) NJ revenue data and Census revenue data. The hard piece is non-tax OSR. If you've done more on that I'm interested in it for sure. It's not really a major issue in the grand scheme of things - the major volatility and risk are in the income tax, sales tax, and corporate tax, but it is an important detail to try to be correct about technically, in the interest of credibility.
+

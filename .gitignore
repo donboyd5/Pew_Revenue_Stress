@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+ignore/
+data/
+images/
+*.html
+*.png
+*.rds
+*.xls*
