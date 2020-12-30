@@ -29,6 +29,14 @@ source(here::here("include", "libraries.r"))
 devtools::session_info()
 ```
 
+<!--
+Note:
+- save all files as nominal, billions, state fiscal year basis
+unless otherwise specified
+
+
+-->
+
 
 # NJ forecast
 
@@ -74,18 +82,18 @@ splice_hf <- function(history, forecast, firstyear=NULL){
     select(year, h, f, value)
 }
 
-splice_hf(h, f)
-
-history <- h
-forecast <- f
-
-h <- combo %>%
-  filter(name=="gdp", stabbr=="US", src=="nipa") %>%
-  select(year, value)
-
-f <- combo %>%
-  filter(name=="gdp", stabbr=="US", src=="cbo_jul2020") %>%
-  select(year, value)
+# splice_hf(h, f)
+# 
+# history <- h
+# forecast <- f
+# 
+# h <- combo %>%
+#   filter(name=="gdp", stabbr=="US", src=="nipa") %>%
+#   select(year, value)
+# 
+# f <- combo %>%
+#   filter(name=="gdp", stabbr=="US", src=="cbo_jul2020") %>%
+#   select(year, value)
 
 
 ```
@@ -134,12 +142,26 @@ gdp %>%
   geom_line() +
   geom_point()
 
-
 ```
 
 
 
 ## Splice NJ GDP data
+```{r}
+# get NJ as share of US in the Moody's baseline and assume it carries forward from there
+combotab
+njshare <- combo %>%
+  filter(name=="gdp", src %in% c(""))
+
+
+gdph <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="nipa") %>%
+  select(year, value)
+
+gdpprior <- combo %>%
+  filter(name=="gdp", stabbr=="US", src=="cbo_precovid") %>%
+  select(year, value)
+```
 
 
 ## Splice NJ tax data
@@ -151,22 +173,448 @@ gdp %>%
 
 # Appendix
 
-```{r ONETIME_combine_njus_data}
+Get individual data files, and with certain exceptions: 
+- put in nominal $ billions
+  (include real versions of some variables; and have gdp price index)
+- on state fiscal year basis (except capital gains)
+- in common format with columns:
+  year, name, value, stabbr, src, fullname
+
+and then combine
+
+```{r ONETIME_usgdp_history, eval=FALSE}
+comment(nipa) # NIPA data all tables, Annual, quarterly, and monthly, latest item released: 2020-12-22
+getNIPATable("1.1.5") # nominal gdp
+# A191RC nominal gdp, Gross domestic product, Current Dollars, Level 
+# A191RX real gdp, Gross domestic product, Chained Dollars, Level
+
+nipa %>%
+  filter(str_detect(vdesc, "Gross domestic product"), freq=="Q") %>%
+  select(vname, vdesc) %>%
+  distinct()
+
+# create fiscal year real and nominal gdp
+gdpdata <- nipa %>%
+  filter(vname %in% c("A191RC", "A191RX"), freq=="Q") 
+summary(gdpdata) # jas 2020 quarter is latest
+
+gdphist <- gdpdata %>%
+  filter(date < "2020-07-01") %>%
+  mutate(year=ifelse(month(date) > 6, year(date) + 1, year(date))) %>%
+  group_by(year, vname) %>%
+  summarise(value=mean(value), .groups="drop") %>%
+  mutate(name=case_when(vname=="A191RC" ~ "gdp",
+                        vname=="A191RX" ~ "rgdp",
+                        TRUE ~ "ERROR"),
+         value=value / 1e3) %>%  # put in $ billions
+  select(year, name, value) %>%
+  pivot_wider() %>%
+  mutate(pgdp=gdp / rgdp) %>%
+  pivot_longer(cols=-c(year)) %>%
+  mutate(stabbr="US",
+         src="nipa",
+         fullname=paste0(name, "_", src))
+           
+saveRDS(gdphist, here::here("data", "usgdp_history.rds"))
+# readRDS(here::here("data", "usgdphist.rds"))
+rm(gdpdata, gdphist)
+
+```
+
+
+```{r ONETIME_usgdp_forecast, eval=FALSE}
+# get Moody's and CBO gdp forecasts and splice
+
+# this first file has history AND forecasts of nominal GDP, quarterly
+# July 2020 baseline and S3 (severe stress scenario), US, 1947q1, 2050q4
+# the baseline is the same as what is in the second file
+
+# Moody's 50 and 90 July.xlsx
+# get Moody's nominal gdp baseline and S3, July
+mfn <- "Moody's 50 and 90 July.xlsx"
+moody <- read_excel(here::here("ignore", "NJ", mfn), 
+                    sheet="GDP", range="A6:C421", col_names = c("yq", "moodys50", "moodys90"))
+moody2 <- moody %>%
+  mutate(year=str_sub(yq, 1, 4) %>% as.numeric,
+         q=str_sub(yq, -1, -1) %>% as.numeric,
+         year=ifelse(q >= 3, year + 1, year)) %>%
+  group_by(year) %>%
+  summarise(moodys_jul2020p50=mean(moodys50),
+            moodys_jul2020p90=mean(moodys90),
+            .groups="drop") %>%
+  pivot_longer(-year, names_to = "src") %>%
+  mutate(stabbr="US",
+         name="gdp",
+         fullname=paste0(name, "_", src))
+summary(moody2)
+
+
+# this second file has forecasts only; I believe it was prepared by Kimberly Burham
+# the Moody's baseline appears to be the same as in the first file
+
+gdpfn <- "GDP MASTER FILE_20201021.xlsx"
+vnames <- c("cbo_precovid", "cbo_jul2020", "moodys_jul2020p50", "lena_fed", "fed_alt")
+
+sfy <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", range="A3:A14", col_names = "year")
+# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
+# moodys_jul2020
+gdp <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", 
+                   range="G3:K14", col_names=vnames)
+# keep only the FY values, not the Q2 values
+gdp2 <- tibble(sfy, gdp) %>%
+  mutate(stabbr="US",
+         name="gdp") %>%
+  pivot_longer(-c(year, name, stabbr), names_to = "src") %>%
+  mutate(fullname=paste0(name, "_", src))
+gdp2
+
+# now get real also, in case we need it
+sfy <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="Real GDP", range="A3:A14", col_names = "year")
+# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
+# moodys_jul2020
+rgdp <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="Real GDP", 
+                   range="G3:K14", col_names=vnames)
+# keep only the FY values, not the Q2 values
+rgdp2 <- tibble(sfy, rgdp) %>%
+  mutate(stabbr="US",
+         name="rgdp") %>%
+  pivot_longer(-c(year, name, stabbr), names_to = "src") %>%
+  mutate(fullname=paste0(name, "_", src))
+rgdp2
+
+
+# check whether nominal gdp is the same in the Moody's file and the second file
+check <- bind_rows(moody2 %>% filter(src == "moodys_jul2020p50") %>% mutate(file="mfile"),
+                   gdp2  %>% filter(src == "moodys_jul2020p50") %>% mutate(file="gfile")) %>%
+  select(year, file, value) %>%
+  pivot_wider(names_from = file) %>%
+  filter(!is.na(gfile)) %>%
+  mutate(diff=gfile - mfile)
+check
+
+
+# get the p90 forecast from the moody's file
+stack <- bind_rows(gdp2, 
+                   rgdp2, 
+                   moody2 %>% 
+                     filter(src == "moodys_jul2020p90", year>=2019)) %>%
+  filter(!is.na(value))
+summary(stack) # this is in billions so we don't need to change scale
+
+saveRDS(stack, here::here("data", "usgdp_forecast.rds"))
+
+rm(mfn, moody, moody2, gdp, gdp2, rgdp, rgdp2, check, stack, sfy)
+
+```
+
+
+```{r ONETIME_njgdp_history, eval=FALSE}
+# year, name, value, stabbr, src, fullname
+
+# don't use BEA because the Moody's history goes back to 1977 but this only goes back to 2005
+# df <- sgdp.q %>%
+#   filter(stabbr=="NJ") %>%
+#   mutate(year = ifelse(month(date) <= 6, year(date), year(date) + 1)) %>%
+#   select(-date) %>%
+#   pivot_longer(cols = c(gdp, rgdp)) %>%
+#   group_by(stabbr, year, name) %>%
+#   summarise(value=mean(value), .groups="drop") %>%
+#   mutate(src="bea",
+#          fullname=paste0(name, "_", src))
+# df
+
+# Moody's nominal state gdp forecasts to 2050q4 SAAR, $ billions
+fn <- "Moody's NJ GSP forecasts.xlsx"
+# NJ GSP forecast -- Dec 2019
+# NJ GSP Forecast -- Jul 2020
+df <- read_excel(here::here("ignore", "NJ", fn),
+                 sheet="NJ GSP Forecast -- Jul 2020",
+                 range="A6:B301",
+                 col_names=c("date", "value"))
+
+df2 <- df %>%
+  mutate(date=yq(date),
+         stabbr="NJ",
+         name="gdp",
+         src="moodys",
+         fullname=paste0(name, "_", src))
+ht(df2)
+# saveRDS(df, here::here("data", "njgdp_q.rds"))
+
+df3 <- df2 %>%
+  mutate(year=ifelse(month(date) > 6,
+                     year(date) + 1,
+                     year(date))) %>%
+  group_by(year, stabbr, name, src, fullname) %>%
+  summarise(value=mean(value, na.rm=TRUE),
+            .groups="drop") %>%
+  filter(year <= 2020)  # 2020 is not true history but should be close
+ht(df3)
+
+saveRDS(df3, here::here("data", "njgdp_history.rds"))
+rm(fn, df, df2, df3)
+
+```
+
+
+```{r ONETIME_njgdp_forecast, eval=FALSE}
+# we have the following data files:
+#  Moodys July 2020 State GSP.xlsx -- July baseline, 50 states, DC, PR, NO US, 1977q1, 2050q4, $ billions, nominal
+#  Moody's NJ GSP forecasts.xlsx -- two tabs, Dec 2019 and July 2020 baseline, NJ only,  1977q1, 2050q4, $ billions, nominal
+# (meshes w/50 states, DC, PR)
+
+# Moody's nominal state gdp forecasts to 2050q4 SAAR, $ billions
+fn <- "Moody's NJ GSP forecasts.xlsx"
+# NJ GSP forecast -- Dec 2019
+# NJ GSP Forecast -- Jul 2020
+s1 <- read_excel(here::here("ignore", "NJ", fn),
+                 sheet="NJ GSP forecast -- Dec 2019",
+                 range="A6:B301",
+                 col_names=c("date", "value")) %>%
+  mutate(name="gdp",
+         src="moodys_dec2019")
+ht(s1)
+
+s2 <- read_excel(here::here("ignore", "NJ", fn),
+                 sheet="NJ GSP Forecast -- Jul 2020",
+                 range="A6:B301",
+                 col_names=c("date", "value")) %>%
+  mutate(name="gdp",
+         src="moodys_jul2020")
+
+df <- bind_rows(s1, s2) %>%
+  mutate(date=yq(date),
+         stabbr="NJ",
+         fullname=paste0(name, "_", src))
+ht(df)
+
+df2 <- df %>%
+  mutate(year=ifelse(month(date) > 6,
+                     year(date) + 1,
+                     year(date))) %>%
+  group_by(year, stabbr, name, src, fullname) %>%
+  summarise(value=mean(value, na.rm=TRUE),
+            .groups="drop") %>%
+  filter(year >= 2020)
+df2
+ht(df2) # good, it is in billions
+
+saveRDS(df2, here::here("data", "njgdp_forecast.rds"))
+rm(fn, s1, s2, df, df2)
+
+```
+
+
+```{r ONETIME_uscapgains, eval=FALSE}
+fn <- "Boyd NJ OSR(3).xlsx"
+df <- read_excel(here::here("ignore", "NJ", fn), sheet="capgains")
+capgains <- df %>%
+  select(year, capgains=cbospliced) %>%
+  arrange(year) %>%
+  mutate(capgains_lagged=lag(capgains)) %>%
+  pivot_longer(-c(year)) %>%
+  mutate(src="CBO_sep2020",
+         fullname=paste0(name, "_", src))
+ht(capgains)
+saveRDS(capgains, here::here("data", "uscapgains.rds"))
+rm(fn, df, capgains)
+
+```
+
+
+
+```{r ONETIME_state_capgains, eval=FALSE}
+ht2 <- readRDS(here::here("data", "ht2.rds"))
+ht2
+capgains_state <- ht2 %>%
+  filter(agi_stub==0) %>%
+  select(year, stabbr, value=a01000) %>%
+  mutate(name="capgains",
+         src="SOI_HT2",
+         fullname=paste0(name, "_", src))
+
+# capgains_state %>%
+#   filter(agi_stub==0, stabbr %in% c("NJ", "NY", "US", "CT")) %>%
+#   ggplot(aes(year, cgpchya, colour=stabbr)) +
+#   geom_line() +
+#   geom_point()
+saveRDS(capgains_state, here::here("data", "statecapgains.rds"))
+rm(ht2, capgains_state)
+
+```
+
+
+```{r ONETIME_censusOSR, eval=FALSE}
+tmp <- count(slgfin, aggvar)
+
+vars <- c("osr", "tottax", "gst", "iit", "cit")
+osr <- slgfin %>%
+  filter(stabbr=="NJ", level==2, aggvar %in% vars) %>%
+  select(stabbr, year, aggvar, value) %>%
+  pivot_wider(names_from = aggvar) %>%
+  mutate(nontax=osr - tottax,
+         othertax=tottax - naz(iit) - naz(gst) - naz(cit)) %>%
+  arrange(year)
+ht(osr)
+summary(osr)
+
+osr_long <- osr %>%
+  pivot_longer(cols=-c(year, stabbr)) %>%
+  mutate(src="census",
+         fullname=paste0(name, "_", src))
+
+saveRDS(osr_long, here::here("data", "osr_census.rds"))
+rm(tmp, vars, osr, osr_long)
+
+```
+
+
+```{r ONETIME_qtax_nj_growth, eval=FALSE}
+# use qtax growth rates to help update osr
+df <- qtax %>%
+  filter(stabbr=="NJ", vname %in% c("gst", "iit", "cit", "tottax")) %>%
+  select(date, stabbr, name=vname, value) %>%
+  mutate(year=ifelse(month(date) > 6,
+                     year(date) + 1,
+                     year(date))) %>%
+  group_by(year, stabbr, name) %>%
+  summarise(value=mean(value, na.rm=TRUE),
+            .groups="drop") %>%
+  pivot_wider() %>%
+  mutate(othertax=tottax - naz(cit) - naz(iit) - naz(gst)) %>%
+  pivot_longer(-c(year, stabbr))
+count(df, name)
+ht(df)
+
+growth <- df %>%
+  filter(year >= 2016) %>%
+  group_by(stabbr, name) %>%
+  arrange(year) %>%
+  mutate(ratio=value / lag(value)) %>%
+  ungroup %>%
+  filter(year>=2017) %>%
+  mutate(src="census",
+         fullname=paste0(name, "_", src))
+
+saveRDS(growth, here::here("data", "tax_growth.rds"))
+
+rm(df, growth)
+  
+```
+
+
+```{r ONETIME_OSRupdated, eval=FALSE}
+# take osr history through 2018
+# estimate 2019 and 2020 using:
+#   fy growth rates for taxes from qtax data
+#   fy growth rates for nontax from Moody's july 2020 state gdp
+
+osrhist <- readRDS(here::here("data", "osr_census.rds"))
+
+taxgrowth <- readRDS(here::here("data", "tax_growth.rds")) %>%
+  filter(year >= 2018, name != "tottax")
+
+nontaxgrowth <- tibble(year=c(2019, 2020, 2021),
+                       ratio=c(1.041, 0.999, 1 - .041),
+                       name="nontax",
+                       stabbr="NJ",
+                       src="census",
+                       fullname="nontax_census")
+# nj fy state gdp nominal growth rates per moody's july 2020
+# 2018 3.6
+# 2019 4.1 
+# 2020 -0.1
+# 2021 -4.1
+
+
+osrupdate <- bind_rows(osrhist, 
+                       taxgrowth %>% filter(year %in% 2019:2020),
+                       nontaxgrowth %>% filter(year %in% 2019:2020)) %>%
+  group_by(stabbr, name) %>%
+  arrange(year) %>%
+  mutate(value=ifelse(year==2019, 
+                      ratio * lag(value),
+                      value)) %>%
+  mutate(value=ifelse(year==2020, 
+                      ratio * lag(value),
+                      value)) %>%
+  ungroup %>%
+  select(-fullname, -ratio) %>%
+  pivot_wider() %>%
+  mutate(tottax=ifelse(is.na(tottax), naz(iit) + naz(gst) + naz(cit) + naz(othertax), tottax),
+         osr=ifelse(is.na(osr), tottax + nontax, osr)) %>%
+  pivot_longer(cols=-c(stabbr, year, src)) %>%
+  mutate(fullname=paste0(name, "_", src))
+
+osrupdate %>%
+  filter(year >= 2018) %>%
+  arrange(year, name)
+
+saveRDS(osrupdate, here::here("data", "osr_census_updated.rds"))
+
+rm(osrhist, taxgrowth, nontaxgrowth, osrupdate)
+
+```
+
+
+```{r ONETIME_njtaxcafr, eval=FALSE}
+fn <- "Boyd NJ OSR(4).xlsx"
+df <- read_excel(here::here("ignore", "NJ", fn), sheet="njtaxcafr")
+
+dfl <- df %>%
+  pivot_longer(cols=-year) %>%
+  mutate(src="NJCAFRs", fullname=paste0(name, "_", src))
+saveRDS(dfl, here::here("data", "njtaxcafr.rds"))
+
+rm(fn, df, dfl)
+
+```
+
+
+```{r ONETIME_govtaxforecasts}
+# get growth rates, apply them to census 2020
+# nj fy state gdp nominal growth rates per moody's july 2020
+# 2018 3.6
+# 2019 4.1 
+# 2020 -0.1
+# 2021 -4.1
+
+fn <- "Boyd NJ OSR(3).xlsx"
+df <- read_excel(here::here("ignore", "NJ", fn), sheet="njtaxforecasts")
+# compute the 2021 growth rates by tax - we will use them to grow census counterparts
+njfc <- df %>%
+  select(-c(nontax, osr)) %>%
+  pivot_longer(cols=-c(year, src)) %>%
+  mutate(fullname=paste0(name, "_", src))
+
+saveRDS(njfc, here::here("data", "njgov_forecasts.rds"))
+
+rm(fn, df, njfc)
+
+
+```
+
+
+```{r ONETIME_combine_data}
 # get previously constructed data
 # year, stabbr, name, src, fullname, value
 
-usgdphist_fy <- readRDS(here::here("data", "usgdphist.rds"))
+usgdp_history <- readRDS(here::here("data", "usgdp_history.rds"))
+summary(usgdp_history)
 
-usgdp_fy <- readRDS(here::here("data", "usgdpfc.rds"))
-summary(usgdp_fy)
+usgdp_forecast <- readRDS(here::here("data", "usgdp_forecast.rds"))
+summary(usgdp_forecast)
 
-njgdp_fy <- readRDS(here::here("data", "njgdp_fy.rds"))
-summary(njgdp_fy) # 1977-2051 gdp_moodys_dec2019 and gdp_moodys_jul2020, nominal, $ billions
-count(njgdp_fy, fullname)
+njgdp_history <- readRDS(here::here("data", "njgdp_history.rds"))
+summary(njgdp_history)
+
+njgdp_forecast <- readRDS(here::here("data", "njgdp_forecast.rds"))
+summary(njgdp_forecast) # 1977-2051 gdp_moodys_dec2019 and gdp_moodys_jul2020, nominal, $ billions
+count(njgdp_forecast, fullname)
 #   fullname               n
 #   <chr>              <int>
-# 1 gdp_moodys_dec2019    75
-# 2 gdp_moodys_jul2020    75
+# 1 gdp_moodys_dec2019    32
+# 2 gdp_moodys_jul2020    32
 
 osrcen <- readRDS(here::here("data", "osr_census_updated.rds")) # 1942-2020, nominal $ thousands
 summary(osrcen)
@@ -224,339 +672,6 @@ saveRDS(combo, here::here("data", "combo.rds"))
 ```
 
 
-```{r ONETIME_usgdp_history, eval=FALSE}
-comment(nipa) # NIPA data all tables, Annual, quarterly, and monthly, latest item released: 2020-12-22
-getNIPATable("1.1.5") # nominal gdp
-# A191RC nominal gdp, Gross domestic product, Current Dollars, Level 
-# A191RX real gdp, Gross domestic product, Chained Dollars, Level
-
-nipa %>%
-  filter(str_detect(vdesc, "Gross domestic product"), freq=="Q") %>%
-  select(vname, vdesc) %>%
-  distinct()
-
-# create fiscal year real and nominal gdp
-gdpdata <- nipa %>%
-  filter(vname %in% c("A191RC", "A191RX"), freq=="Q") 
-summary(gdpdata) # jas 2020 quarter is latest
-
-gdphist <- gdpdata %>%
-  filter(date < "2020-07-01") %>%
-  mutate(year=ifelse(month(date) > 6, year(date) + 1, year(date))) %>%
-  group_by(year, vname) %>%
-  summarise(value=mean(value), .groups="drop") %>%
-  mutate(name=case_when(vname=="A191RC" ~ "gdp",
-                        vname=="A191RX" ~ "rgdp",
-                        TRUE ~ "ERROR")) %>%
-  select(year, name, value) %>%
-  pivot_wider() %>%
-  mutate(pgdp=gdp / rgdp) %>%
-  pivot_longer(cols=-c(year)) %>%
-  mutate(stabbr="US",
-         src="nipa",
-         fullname=paste0(name, "_", src))
-           
-saveRDS(gdphist, here::here("data", "usgdphist.rds"))
-
-```
-
-
-
-```{r ONETIME_usgdpfc, eval=FALSE}
-# get Moody's and CBO gdp forecasts and splice
-gdpfn <- "GDP MASTER FILE_20201021.xlsx"
-vnames <- c("cbo_precovid", "cbo_jul2020", "moodys_jul2020p50", "lena_fed", "fed_alt")
-
-sfy <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", range="A3:A14", col_names = "year")
-# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
-# moodys_jul2020
-ngdp <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", 
-                   range="G3:K14", col_names=vnames)
-# keep only the FY values, not the Q2 values
-ngdp_fy <- tibble(sfy, ngdp) %>%
-  mutate(stabbr="US",
-         name="gdp") %>%
-  pivot_longer(-c(year, name, stabbr), names_to = "src") %>%
-  mutate(fullname=paste0(name, "_", src))
-ngdp_fy
-
-# now get real also, in case we need it Real GDP 
-sfy <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", range="A3:A14", col_names = "year")
-# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
-# moodys_jul2020
-rgdp <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="Real GDP", 
-                   range="G3:K14", col_names=vnames)
-# keep only the FY values, not the Q2 values
-rgdp_fy <- tibble(sfy, rgdp) %>%
-  mutate(stabbr="US",
-         name="rgdp") %>%
-  pivot_longer(-c(year, name, stabbr), names_to = "src") %>%
-  mutate(fullname=paste0(name, "_", src))
-rgdp_fy
-
-stack <- bind_rows(ngdp_fy, rgdp_fy) %>%
-  filter(!is.na(value))
-saveRDS(stack, here::here("data", "usgdpfc.rds"))
-
-```
-
-
-```{r ONETIME_nj_gdp, eval=FALSE}
-# Moody's nominal state gdp forecasts to 2050q4 SAAR, $ billions
-fn <- "Moody's NJ GSP forecasts.xlsx"
-# NJ GSP forecast -- Dec 2019
-# NJ GSP Forecast -- Jul 2020
-s1 <- read_excel(here::here("ignore", "NJ", fn),
-                 sheet="NJ GSP forecast -- Dec 2019",
-                 range="A6:B301",
-                 col_names=c("date", "value")) %>%
-  mutate(name="gdp",
-         src="moodys_dec2019")
-ht(s1)
-
-s2 <- read_excel(here::here("ignore", "NJ", fn),
-                 sheet="NJ GSP Forecast -- Jul 2020",
-                 range="A6:B301",
-                 col_names=c("date", "value")) %>%
-  mutate(name="gdp",
-         src="moodys_jul2020")
-
-df <- bind_rows(s1, s2) %>%
-  mutate(date=yq(date),
-         stabbr="NJ",
-         fullname=paste0(name, "_", src))
-ht(df)
-saveRDS(df, here::here("data", "njgdp_q.rds"))
-
-df2 <- df %>%
-  mutate(year=ifelse(month(date) > 6,
-                     year(date) + 1,
-                     year(date))) %>%
-  group_by(year, stabbr, name, src, fullname) %>%
-  summarise(value=mean(value, na.rm=TRUE),
-            .groups="drop")
-df2
-saveRDS(df2, here::here("data", "njgdp_fy.rds"))
-
-# df %>%
-#   filter(year(date)>=2015, year(date)<=2025) %>%
-#   ggplot(aes(date, value, colour=type)) +
-#   geom_point() +
-#   geom_line()
-# 
-# df %>%
-#   filter(year(date)>=2017, year(date)<=2030) %>%
-#   mutate(ivalue=value / value[date=="2019-10-01"] * 100) %>%
-#   ggplot(aes(date, ivalue, colour=type)) +
-#   geom_point() +
-#   geom_line()
-# 
-# df %>%
-#   group_by(type, quarter(date)) %>%
-#   arrange(date) %>%
-#   mutate(pchya=value / value[match(year(date) - 1, year(date))] * 100 - 100) %>%
-#   ungroup %>%
-#   filter(year(date)>=2017, year(date)<=2030) %>%
-#   ggplot(aes(date, pchya, colour=type)) +
-#   geom_point() +
-#   geom_line() +
-#   geom_hline(yintercept = 0) +
-#   scale_y_continuous(breaks=seq(-20, 20, 1))
-
-```
-
-
-```{r ONETIME_uscapgains, eval=FALSE}
-fn <- "Boyd NJ OSR(3).xlsx"
-df <- read_excel(here::here("ignore", "NJ", fn), sheet="capgains")
-capgains <- df %>%
-  select(year, capgains=cbospliced) %>%
-  arrange(year) %>%
-  mutate(capgains_lagged=lag(capgains)) %>%
-  pivot_longer(-c(year)) %>%
-  mutate(src="CBO_sep2020",
-         fullname=paste0(name, "_", src))
-ht(capgains)
-saveRDS(capgains, here::here("data", "uscapgains.rds"))
-
-```
-
-
-
-```{r ONETIME_state_capgains, eval=FALSE}
-ht2 <- readRDS(here::here("data", "ht2.rds"))
-ht2
-capgains_state <- ht2 %>%
-  filter(agi_stub==0) %>%
-  select(year, stabbr, value=a01000) %>%
-  mutate(name="capgains",
-         src="SOI_HT2",
-         fullname=paste0(name, "_", src))
-
-# capgains_state %>%
-#   filter(agi_stub==0, stabbr %in% c("NJ", "NY", "US", "CT")) %>%
-#   ggplot(aes(year, cgpchya, colour=stabbr)) +
-#   geom_line() +
-#   geom_point()
-saveRDS(capgains_state, here::here("data", "statecapgains.rds"))
-
-
-```
-
-
-```{r ONETIME_censusOSR, eval=FALSE}
-tmp <- count(slgfin, aggvar)
-
-vars <- c("osr", "tottax", "gst", "iit", "cit")
-osr <- slgfin %>%
-  filter(stabbr=="NJ", level==2, aggvar %in% vars) %>%
-  select(stabbr, year, aggvar, value) %>%
-  pivot_wider(names_from = aggvar) %>%
-  mutate(nontax=osr - tottax,
-         othertax=tottax - naz(iit) - naz(gst) - naz(cit)) %>%
-  arrange(year)
-ht(osr)
-summary(osr)
-
-osr_long <- osr %>%
-  pivot_longer(cols=-c(year, stabbr)) %>%
-  mutate(src="census",
-         fullname=paste0(name, "_", src))
-
-saveRDS(osr_long, here::here("data", "osr_census.rds"))
-
-```
-
-
-```{r ONETIME_qtax_nj_growth, eval=FALSE}
-# use this to help update osr
-df <- qtax %>%
-  filter(stabbr=="NJ", vname %in% c("gst", "iit", "cit", "tottax")) %>%
-  select(date, stabbr, name=vname, value) %>%
-  mutate(year=ifelse(month(date) > 6,
-                     year(date) + 1,
-                     year(date))) %>%
-  group_by(year, stabbr, name) %>%
-  summarise(value=mean(value, na.rm=TRUE),
-            .groups="drop") %>%
-  pivot_wider() %>%
-  mutate(othertax=tottax - naz(cit) - naz(iit) - naz(gst)) %>%
-  pivot_longer(-c(year, stabbr))
-count(df, name)
-ht(df)
-
-growth <- df %>%
-  filter(year >= 2016) %>%
-  group_by(stabbr, name) %>%
-  arrange(year) %>%
-  mutate(ratio=value / lag(value)) %>%
-  ungroup %>%
-  filter(year>=2017) %>%
-  mutate(src="census",
-         fullname=paste0(name, "_", src))
-
-saveRDS(growth, here::here("data", "tax_growth.rds"))
-
-  
-```
-
-
-```{r ONETIME_OSRupdated, eval=FALSE}
-# take osr history through 2018
-# estimate 2019 and 2020 using:
-#   fy growth rates for taxes from qtax data
-#   fy growth rates for nontax from Moody's july 2020 state gdp
-
-osrhist <- readRDS(here::here("data", "osr_census.rds"))
-
-taxgrowth <- readRDS(here::here("data", "tax_growth.rds")) %>%
-  filter(year >= 2018, name != "tottax")
-
-nontaxgrowth <- tibble(year=c(2019, 2020, 2021),
-                       ratio=c(1.041, 0.999, 1 - .041),
-                       name="nontax",
-                       stabbr="NJ",
-                       src="census",
-                       fullname="nontax_census")
-# nj fy state gdp nominal growth rates per moody's july 2020
-# 2018 3.6
-# 2019 4.1 
-# 2020 -0.1
-# 2021 -4.1
-
-
-osrupdate <- bind_rows(osrhist, 
-                       taxgrowth %>% filter(year %in% 2019:2020),
-                       nontaxgrowth %>% filter(year %in% 2019:2020)) %>%
-  group_by(stabbr, name) %>%
-  arrange(year) %>%
-  mutate(value=ifelse(year==2019, 
-                      ratio * lag(value),
-                      value)) %>%
-  mutate(value=ifelse(year==2020, 
-                      ratio * lag(value),
-                      value)) %>%
-  ungroup %>%
-  select(-fullname, -ratio) %>%
-  pivot_wider() %>%
-  mutate(tottax=ifelse(is.na(tottax), naz(iit) + naz(gst) + naz(cit) + naz(othertax), tottax),
-         osr=ifelse(is.na(osr), tottax + nontax, osr)) %>%
-  pivot_longer(cols=-c(stabbr, year, src)) %>%
-  mutate(fullname=paste0(name, "_", src))
-
-osrupdate %>%
-  filter(year >= 2018) %>%
-  arrange(year, name)
-
-saveRDS(osrupdate, here::here("data", "osr_census_updated.rds"))
-
-```
-
-
-```{r ONETIME_njtaxcafr, eval=FALSE}
-fn <- "Boyd NJ OSR(4).xlsx"
-df <- read_excel(here::here("ignore", "NJ", fn), sheet="njtaxcafr")
-
-dfl <- df %>%
-  pivot_longer(cols=-year) %>%
-  mutate(src="NJCAFRs", fullname=paste0(name, "_", src))
-saveRDS(dfl, here::here("data", "njtaxcafr.rds"))
-
-```
-
-
-```{r ONETIME_govtaxforecasts}
-# get growth rates, apply them to census 2020
-# nj fy state gdp nominal growth rates per moody's july 2020
-# 2018 3.6
-# 2019 4.1 
-# 2020 -0.1
-# 2021 -4.1
-
-
-fn <- "Boyd NJ OSR(3).xlsx"
-df <- read_excel(here::here("ignore", "NJ", fn), sheet="njtaxforecasts")
-# compute the 2021 growth rates by tax - we will use them to grow census counterparts
-njfc <- df %>%
-  select(-c(nontax, osr)) %>%
-  pivot_longer(cols=-c(year, src)) %>%
-  mutate(fullname=paste0(name, "_", src))
-
-saveRDS(njfc, here::here("data", "njgov_forecasts.rds"))
-
-# 
-#   group_by(src, name) %>%
-#   mutate(ratio=value / value[match(year -1, year)]) %>%
-#   ungroup %>%
-#   arrange(src, name, year) %>%
-#   rename(njfc=value)
-# 
-# dfl <- df %>%
-#   pivot_longer(cols=-year) %>%
-#   mutate(src="NJCAFRs", fullname=paste0(name, "_", src))
-
-
-```
 
 
 ```{r check}
