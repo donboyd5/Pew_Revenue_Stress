@@ -50,13 +50,27 @@ tmp2
 mod <- lm(nontax ~ gdp, data=tmp2 %>% filter(year >= 1990))
 summary(mod)
 
-tmp %>%
-  filter(year %in% 1964:2019) %>%
+tmp3 <- tmp %>%
+  filter(year %in% 1964:2020) %>%
   select(-pch) %>%
   pivot_wider() %>%
-  as_tsibble(index = year) %>%
-  model(ARIMA(nontax ~ gdp)) %>%
-  glance
+  as_tsibble(index = year) 
+
+tmp3 %>%
+  model(lev=ARIMA(log(nontax))) %>%
+  forecast(h="2 years") %>%
+  autoplot(tmp3 %>% filter(year >= 2010), level=NULL) +
+  geom_point(aes(x=year, y=nontax))
+
+tmp4 <- tmp3 %>%
+  mutate(pctgdp=nontax / gdp * 100)
+
+tmp4 %>%
+  model(lev=ARIMA(pctgdp)) %>%
+  forecast(h="2 years") %>%
+  autoplot(tmp4 %>% filter(year >= 2010), level=NULL) +
+  geom_point(aes(x=year, y=pctgdp))
+
 
 mod2 <- tmp2 %>%
   model(ARIMA(nontax ~ gdp))
@@ -86,4 +100,29 @@ report(fit)
 us_change_future <- new_data(us_change, 8) %>% mutate(Income = mean(us_change$Income))
 
 forecast(fit, new_data = us_change_future) %>% autoplot(us_change)
+
+# https://otexts.com/fpp3/
+# http://fable.tidyverts.org/
+
+library(fable)
+library(tsibble)
+library(tsibbledata)
+library(lubridate)
+#> Warning: package 'lubridate' was built under R version 3.6.3
+library(dplyr)
+
+glimpse(aus_retail)
+
+aus_retail %>%
+  filter(
+    State %in% c("New South Wales", "Victoria"),
+    Industry == "Department stores"
+  ) %>% 
+  model(
+    ets = ETS(box_cox(Turnover, 0.3)),
+    arima = ARIMA(log(Turnover)),
+    snaive = SNAIVE(Turnover)
+  ) %>%
+  forecast(h = "2 years") %>% 
+  autoplot(filter(aus_retail, year(Month) > 2010), level = NULL)
 

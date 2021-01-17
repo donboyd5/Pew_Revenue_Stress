@@ -12,7 +12,7 @@ output:
     toc: yes
     df_print: paged
 editor_options:
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 
@@ -39,18 +39,18 @@ Note:
 -->
 
 
-# NJ forecast - introduction
+# Constructing state OSR forecasts - introduction
 
-Goal is to forecast NJ own-source revenue (osr) and components using a method that:
+Goal is to forecast state own-source revenue (osr) and components using a method that:
 
 *   is compatible with a state's own short-term forecasts,
 *   stabilizes in the longer term to grow at the rate of state gdp, and
-*   can be applied to other states with a minimal amount of digging for new information
+*   can be applied to individual states with a minimal amount of digging for new information
 
 
 Key forecast elements:
 
-*   NJ own-source revenue and major components
+*   State own-source revenue and major components
     +   using Census definitions
     +   state fiscal years (periods ending in June)
     +   nominal
@@ -59,22 +59,22 @@ Key forecast elements:
     
 *   National economic forecast - uses one of the relatively current forecasts provided by Pew:
     +   CBO July 2020 (baseline)
+    +   Moody's December 2020, p50 (baseline) - the most-current full forecast we have
     +   Moody's July 2020, p50
     +   Moody's July 2020, p90 (S3 - severe stress scenario)
     +   (We also have available a Moody's December 2019 baseline forecast, not used)
     +   Federal Reserve alternative severe forecast
     
-*   NJ economic forecast:
-    +   available state GDP forecasts are the Moody's December 2019 (which is not used below) and Moody's July 2020 p50 (baseline) forecasts
-    +   the only pair of US-NJ GDP forecasts we have that are directly comparable are the Moody's July 2020 p50 national and state forecasts
-    +   I compute the difference between these national and state GDP forecasts and assume that the difference between national and NJ growth for other national forecasts is the same as this
+*   State economic forecast:
+    +   available state GDP forecasts are Moody's baseline forecasts released in December 2019, July 2020, and December 2020, each of which also has an associated Moody's national forecast
+    +   to get state GDP forecasts under different national scenarios, I assume the difference between a state's growth rate and the national growth rate is the same as it is in the most-recent Moody's forecast (December 2020)
     
 
 Overall approach for OSR and components:
 
 *   2019 and earlier - Census
 *   2020 - tax growth rates from Census quarterly data; nontax based on state GDP estimate
-*   2021 uses growth rates from a NJ-governmental forecast:
+*   2021 uses growth rates from a state governmental forecast, or inferred from those forecasts:
     +   currently uses the governor's August 2020 estimate
     +   note that governor raised his estimate in Nov 2020 by [$398 million](https://www.nj.gov/treasury/news/2020/11062020.shtml); this is not yet reflected but can be
     +   also note that OLS estimate is about $1.3 billion higher than gov August, could be used as an alternative forecast for 2021
@@ -90,6 +90,194 @@ Selected issues and considerations:
 *   Assumes all revenue sources move from their 2021 values to longer term values, as % of GDP; historically, other tax revenue has tended to decline as % of GDP until policymakers explicitly raise it
 *   Because the 2021 OSR estimate is based on a fixed governmental forecast, and is independent of the economic forecast, it may seem odd in relation to a severe-downturn economic forecast for FY 2021 - in particular, OSR as a percent of GDP is unusually high in 2021 when using the Moody's p90 forecast (because gdp is so low in that forecast)
 *   Because OSR as % of GDP was rising in years leading up to recession, it reverts to a high level. This reflects recent tax-increase choices, I think.
+
+
+# National economic forecasts
+
+The plot below shows available nominal GDP forecasts on a July-June state fiscal year basis. (Each year ends in June. For example, the 2021 forecast is for the 12 months ending in June 2021.)
+
+The Moody's Dec 2020 baseline forecast is far more optimistic than the CBO July baseline, reflecting the positive economic news received since July. It  and is more plausible than the CBO baseline. The Moody's July baseline also was more optimistic than CBO July, but not nearly as much.
+
+
+```{r eval=TRUE, include=TRUE}
+# look at the national forecasts
+usgdp <- readRDS(here::here("data", "usgdp_spliced.rds"))
+
+```
+
+
+```{r natfc, include=TRUE, fig.width=10, fig.height=6}
+
+fcs <- c("cbo_jul2020", "cbo_precovid", "moodys_dec2020p50", "fed_alt")
+
+usgdp %>%
+  # filter(year >= 2015, src %in% fcs) %>%
+  filter(year >= 2015) %>%
+  ggplot(aes(year, value, colour=src)) +
+  geom_line(size=1) +
+  geom_point() +
+  ggtitle("National forecasts of nominal GDP, state fiscal year basis") +
+  theme_bw()
+
+```
+
+
+# State growth vs national growth in the Moody's December 2020 baseline forecast
+
+```{r}
+# get data
+# look at national-state differences
+dfl <- readRDS(here::here("data", "gdpstus_moodys_dec2020.rds"))
+
+# sts <- c("CA", "CO", "FL", "MA", "NJ","NY", "PA", "IL")
+sts <- c("MA", "NJ")
+
+```
+
+
+
+## National growth and state growth
+```{r include=TRUE, fig.width=10, fig.height=6}
+data <- dfl %>%
+  filter(name %in% c("pch", "pchus"), stabbr %in% sts) %>%
+  mutate(name=factor(name, levels=c("pch", "pchus"), labels=c("state", "US")))
+
+data %>%
+  filter(year %in% 2000:2030) %>%
+  ggplot(aes(year, value, colour=name)) +
+  geom_line(size=1) +
+  geom_point() +
+  scale_colour_manual(values=c("blue", "darkgreen")) +
+  # geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 2020.5, linetype="dotted") +
+  scale_y_continuous(name="% change", breaks=seq(-10, 20, 1)) +
+  facet_wrap(~stabbr) +
+  ggtitle("Nominal GDP growth, state fiscal year basis, selected states, Moody's December 2020 forecast",
+          subtitle="Dotted vertial line marks break between history and forecast") +
+  theme_bw()
+
+```
+
+
+## State growth minus national growth
+```{r include=TRUE, fig.width=10, fig.height=6}
+data <- dfl %>%
+  filter(name=="pdelta", stabbr %in% sts)
+
+avgstart <- 2000
+avgend <- 2020
+avgs <- data %>%
+  filter(year %in% avgstart:avgend) %>%
+  group_by(stabbr) %>%
+  summarise(avg=mean(value), .groups="drop")
+
+data %>%
+  filter(year >= 2000, year <= 2030) %>%
+  ggplot(aes(year, value)) +
+  geom_line(colour="blue", size=1) +
+  geom_point(colour="blue") +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 2020.5, linetype="dotted") +
+  geom_hline(aes(yintercept=avg), colour="red", size=0.4, data=avgs) +
+  scale_y_continuous(name="State % change minus US % change", breaks=seq(-10, 10, 1)) +
+  scale_x_continuous(name="State fiscal year", breaks=seq(1980, 2050, 5)) +
+  facet_wrap(~stabbr, ncol=2, scales="fixed") +
+  ggtitle("Nominal GDP growth: State minus nation, selected states, Moody's December 2020 forecast",
+          subtitle=paste0("Red horizontal line is average over ", avgstart, "-", avgend,
+                          ". Dotted vertial line marks break between history and forecast.")) +
+  theme_bw()
+```
+
+
+# OSR history and forecasts
+
+```{r get_data}
+usgdp <- readRDS(here::here("data", "usgdp_spliced.rds"))
+stgdp <- readRDS(here::here("data", "stgdp_spliced.rds"))
+osr <- readRDS(here::here("data", "osr_census_updated.rds")) # ends 2020
+
+```
+
+
+```{r get_assumptions}
+fn <- "assumptions.xlsx"
+assume <- read_excel(here::here("data", fn), sheet="osr_forecasts") %>%
+  filter(!is.na(stabbr))
+assume
+
+# forecast 2021
+natfc <- "cbo_jul2020"
+stfc <- "ols_sep2020"  # for NJ
+
+
+
+
+nontax_growth2021 <- 0  # must assume as we don't have a forecast, NJ growth rate
+pctgdp_years <- 3 # number of years we use to determine osr target pct of gdp
+recover_years <- 4  # number of years from trough to return to target % of gd p
+
+gov_forecast <- "govaugxleg"  # govbmxleg, govaugxleg, olssepxleg
+
+osrvars <- c("iit", "gst", "cit", "othertax", "nontax") # define the desired order
+
+keyvars <- c("cit_census", "gst_census", "iit_census", "othertax_census",
+           "nontax_census", "osr_census", "gdp_beaspliced")
+
+```
+
+
+
+
+
+# OLDER stuff
+
+```{r output, echo=FALSE, include=TRUE, results="asis", eval=FALSE}
+# https://stackoverflow.com/questions/36373630/how-to-create-a-loop-that-includes-both-a-code-chunk-and-text-with-knitr-in-r
+# to loop, need:
+#  include=TRUE, results="asis"
+#  2 spaces before \n
+
+# echo=FALSE, fig.keep = 'all',  results = 'asis',  message=FALSE, warning=FALSE, comment =NA, fig.align='center', fig.height=6.5,  fig_width=10
+
+vars <- c("a", "b", "c")
+
+for (var in vars) {
+  cat("  \n")
+  cat("#",var,"\n")
+}
+
+
+```  
+
+
+```{r outputs2, fig.width=6, echo=FALSE, include=TRUE, message=FALSE, results="asis", eval=FALSE}
+library(pander)
+
+vars <- c("st1", "st2", "st3")
+
+for (var in vars) {
+  # Inserts Month titles
+  pander::pandoc.header(var, level = 2)
+  # Section contents
+  cat(paste0("Some text about state ", var))
+  # plot(pressure)
+  # adding also empty lines, to be sure that this is valid Markdown
+  pander::pandoc.p('')
+  pander::pandoc.p('')
+}
+
+
+# for (i in unique(airquality$Month)) {
+#    # Inserts Month titles
+#    pander::pandoc.header(month.name[i], level = 3)
+#    # Section contents
+#    plot(airquality[airquality$Month == i,])
+#    # adding also empty lines, to be sure that this is valid Markdown
+#    pander::pandoc.p('')
+#    pander::pandoc.p('')
+# }
+```
+
 
 
 # NJ forecast - results
@@ -110,7 +298,30 @@ keyvars <- c("cit_census", "gst_census", "iit_census", "othertax_census",
 ```
 
 
-```{r getdata, include=FALSE}
+```{r}
+# year value src name
+usgdp <- readRDS(here::here("data", "usgdp_spliced.rds"))
+stgdp <- readRDS(here::here("data", "stgdp_spliced.rds"))
+
+gdp <- stgdp %>%
+  rename(stgdp=value) %>%
+  left_join(usgdp %>% select(year, src, usgdp=value),
+             by = c("year", "src")) %>%
+  select(src, stabbr, year, usgdp, stgdp) %>%
+  arrange(src, stabbr, year)
+
+# tax data Census
+# assumptions
+
+# and then go!
+
+# cat("\n\n", "# Data Cleaning - Outputs", "\n\n")
+
+```
+
+
+
+```{r OLD_getdata, include=FALSE}
 combo <- readRDS(here::here("data", "combo.rds"))
 
 combotab <- combo %>%
