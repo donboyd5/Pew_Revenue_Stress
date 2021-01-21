@@ -23,6 +23,10 @@ library(kableExtra)
 
 library(gt)
 
+library(quantmod)
+library(fable)
+library(feasts)
+
 library(janitor)
 library(qtax)
 library(btools) # has a few useful functions -- devtools::install_github("donboyd5/btools")

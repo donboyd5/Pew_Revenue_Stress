@@ -12,12 +12,12 @@ output:
     toc: yes
     df_print: paged
 editor_options:
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 
 ```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, include=FALSE)
+knitr::opts_chunk$set(echo = FALSE, include=FALSE, fig.width=10, fig.height=6)
 options(width = 150)
 ```
 
@@ -39,7 +39,9 @@ Note:
 -->
 
 
-# Constructing state OSR forecasts - introduction
+# Goals and methods: Constructing state OSR forecasts
+
+## Goals
 
 Goal is to forecast state own-source revenue (osr) and components using a method that:
 
@@ -91,316 +93,565 @@ Selected issues and considerations:
 *   Because the 2021 OSR estimate is based on a fixed governmental forecast, and is independent of the economic forecast, it may seem odd in relation to a severe-downturn economic forecast for FY 2021 - in particular, OSR as a percent of GDP is unusually high in 2021 when using the Moody's p90 forecast (because gdp is so low in that forecast)
 *   Because OSR as % of GDP was rising in years leading up to recession, it reverts to a high level. This reflects recent tax-increase choices, I think.
 
+## Data sources
 
-# National economic forecasts
+*   US GDP history: BEA NIPA tables, quarterly converted to state fiscal year (July-June)
+*   State GDP history: BEA data, spliced NAICS and SIC; quarterly converted to state fiscal year, adjusted
+*   US GDP forecasts:
+    +   CBO pre-covid
 
-The plot below shows available nominal GDP forecasts on a July-June state fiscal year basis. (Each year ends in June. For example, the 2021 forecast is for the 12 months ending in June 2021.)
 
-The Moody's Dec 2020 baseline forecast is far more optimistic than the CBO July baseline, reflecting the positive economic news received since July. It  and is more plausible than the CBO baseline. The Moody's July baseline also was more optimistic than CBO July, but not nearly as much.
+# Preliminaries
 
-
-```{r eval=TRUE, include=TRUE}
-# look at the national forecasts
-usgdp <- readRDS(here::here("data", "usgdp_spliced.rds"))
+```{r}
+pch <- function(df){
+  df2 <- df %>%
+    mutate(pch=value / value[match(year - 1, year)] * 100 - 100)
+  df2$pch
+}
 
 ```
 
 
+```{r get_data}
+# get data
+usgdp <- readRDS(here::here("data", "usgdp.rds"))
+stgdp <- readRDS(here::here("data", "stgdp.rds"))
+
+sp500tr3 <- readRDS(here::here("data", "sp500tr.rds"))
+cg <- readRDS(here::here("data", "uscapgains.rds"))
+cgmodel <- readRDS(here::here("data", "cgmodel.rds"))
+cgfcast <- readRDS(here::here("data", "cgfcast.rds"))
+
+osr <- readRDS(here::here("data", "osr_census_updated.rds")) %>% # ends 2020
+  mutate(value=value / 1000)  %>% # put in $ millions
+  arrange(stabbr, name, year) %>%
+  group_by(stabbr, name) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+  ungroup
+
+osr_pctgdp <- readRDS(here::here("data", "osr_pctgdp.rds"))
+
+targets <- osr_pctgdp %>%
+  pivot_longer(cols=starts_with("p"), values_to = "targetpct", names_to = "ma_years") %>%
+  mutate(ma_years=str_sub(ma_years, 2, -1) %>% as.integer)
+# targets
+
+```
+
+
+
+```{r get_assumptions, include=FALSE}
+fn <- "assumptions.xlsx"
+
+assume <- read_excel(here::here("data", fn), sheet="osr_forecasts") %>%
+  filter(!is.na(stabbr)) %>%
+  # convert to percentage
+  mutate(across(c(iit, cit, gst, othertax, nontax), ~ . * 100))
+assume
+
+# assumecg <- read_excel(here::here("data", fn), sheet="cgboyd", skip=3) %>%
+#   filter(year >= 1996)
+# assumecg
+
+```
+
+
+
+## National economic forecasts
+
+The plot below shows available nominal GDP forecasts on a July-June state fiscal year basis. (Each year ends in June. For example, the 2021 forecast is for the 12 months ending in June 2021.)
+
+The Moody's Dec 2020 baseline forecast is far more optimistic than the CBO July baseline, reflecting the positive economic news received since July. It is more plausible than the CBO baseline. The Moody's July baseline also was more optimistic than CBO July, but not nearly as much.
+
+
 ```{r natfc, include=TRUE, fig.width=10, fig.height=6}
 
-fcs <- c("cbo_jul2020", "cbo_precovid", "moodys_dec2020p50", "fed_alt")
+fcorder <- c("cbo_precovid", "cbo_jul2020", "moodys_jul2020p50", "moodys_jul2020p90",
+             "moodys_dec2020", "fedalt")
 
 usgdp %>%
-  # filter(year >= 2015, src %in% fcs) %>%
   filter(year >= 2015) %>%
-  ggplot(aes(year, value, colour=src)) +
+  select(-gdphist) %>%
+  pivot_longer(-year, names_to = "forecast") %>%
+  mutate(forecast=factor(forecast, level=fcorder)) %>%
+  arrange(forecast) %>%
+  ggplot(aes(year, value / 1e3, colour=forecast)) +
   geom_line(size=1) +
   geom_point() +
+  scale_y_continuous(name="$ billions", breaks=seq(10e3, 50e3, 2.5e3), labels=scales::comma) +
+  scale_x_continuous(name="State fiscal year", breaks=seq(2010, 2040, 2)) +
   ggtitle("National forecasts of nominal GDP, state fiscal year basis") +
   theme_bw()
 
 ```
 
 
-# State growth vs national growth in the Moody's December 2020 baseline forecast
+## National forecasts: Stock market and capital gains
+
+Capital gains are important to state income taxes, as will be apparent when we look at individual states.
+
+We have a small model that estimates capital gains based upon GDP, the stock market (S&P 500), and their own history.
+
+We used this model to forecast capital gains under different economic forecasts, using the baseline and fedalt equity return assumptions.
+
+Here is a plot of how well/poorly the model does over history.
+
+
+```{r cgfit, include=TRUE, fig.width=10, fig.height=6}
+
+cgmodel %>% 
+  augment() %>%
+  select(year, actual=cg, fitted=.fitted) %>%
+  pivot_longer(-year, names_to = "type") %>%
+  ggplot(aes(year, value, colour=type)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(name="Calendar year", breaks=seq(1990, 2020, 2)) +
+  scale_y_continuous(name="$ billions", labels = scales::comma) +
+  ggtitle("Model fit for national capital gains model") +
+  theme_bw()
+
+```
+
+
+And here are the forecasts under selected economic forecast and equity-return assumption combinations.
+
+
+```{r cgfc, include=TRUE, fig.width=10, fig.height=6}
+
+cgfcast %>%
+  filter(year >= 2015) %>%
+  filter((gdpname=="cbo_precovid" & eqname=="pew_covidbase") |
+         (gdpname=="cbo_jul2020" & eqname=="pew_covidbase") |
+         (gdpname=="moodys_dec2020" & eqname=="pew_covidbase") |
+         (gdpname=="fedalt" & eqname=="pew_covidbase") |
+         (gdpname=="fedalt" & eqname=="pew_fedalt")) %>%
+  mutate(grp=paste0(gdpname, "-", eqname)) %>%
+  ggplot(aes(year, cgfcast, colour=grp)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(name=NULL, breaks=seq(1990, 2040, 2)) +
+  scale_y_continuous(name="$ billions", labels = scales::comma) +
+  ggtitle("Model forecasts of capital gains",
+          subtitle="Selected economic-equity forecast combinations") +
+  theme_bw()
+
+
+```
+
+
+# State osr forecasts
+```{r state_data_prep}
+# prep data for all states
+stusgdp <- bind_rows(usgdp %>% mutate(stabbr="US"),
+                     stgdp) %>%
+  pivot_longer(-c(year, stabbr), names_to = "forecast") %>%
+  group_by(forecast, stabbr) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 -100) %>%
+  ungroup
+
+gdposr_pch <- stgdp %>%
+  select(stabbr, year, gdp=moodys_dec2020) %>%
+  inner_join(osr %>% 
+               filter(name=="osr") %>% 
+               select(stabbr, year, osr=value),
+             by = c("stabbr", "year")) %>%
+  pivot_longer(cols=-c(year, stabbr)) %>%
+  group_by(stabbr, name) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+  ungroup %>%
+  filter(year > min(year))
+
+
+```
+
+
+```{r state_gdp_functions}
+# functions to be applied to each state
+gdp_diff <- function(st){
+    # compare national and state gdp growth for a state
+  df <- stusgdp %>%
+    filter(stabbr %in% c("US", st),
+           forecast=="moodys_dec2020",
+           year >= 1965) %>%
+    select(year, stabbr, pch) %>%
+    pivot_wider(names_from = stabbr, values_from = pch) %>%
+    mutate(diff=.[[st]] - US)
+  df
+}
+
+gdp_comp_plot <- function(st){
+  # compare national and state gdp growth for a state
+  df <- gdp_diff(st)
+  
+  df %>%
+    select(-diff) %>%
+    filter(year >= 2000, year <= 2030) %>%
+    pivot_longer(-year, names_to = "stabbr") %>%
+    ggplot(aes(year, value, colour=stabbr)) +
+      geom_line(size=1) +
+      geom_point() +
+      scale_colour_manual(values=c("blue", "darkgreen")) +
+      geom_hline(yintercept = 0) +
+      geom_vline(xintercept = 2020.5, linetype="dotted") +
+      geom_hline(aes(yintercept=avg$avg), colour="red", size=0.4) +
+      scale_y_continuous(name="% change", breaks=seq(-20, 20, 1)) +
+      scale_x_continuous(name="State fiscal year", breaks=seq(1980, 2050, 5)) +
+      ggtitle(paste0("Nominal GDP growth for ", st, " and the nation, Moody's December 2020 forecast"),
+              subtitle=paste0("Dotted vertical line marks break between history and forecast")) +
+      theme_bw()
+}
+
+
+gdp_diff_plot <- function(st){
+  # compare national and state gdp growth for a state
+  df <- gdp_diff(st)
+  
+  avgstart <- 2000
+  avgend <- 2020
+  avg <- df %>%
+    filter(year %in% avgstart:avgend) %>%
+    summarise(avg=mean(diff))
+  
+  df %>%
+    filter(year >= 2000, year <= 2030) %>%
+    ggplot(aes(year, diff)) +
+      geom_line(colour="blue") +
+      geom_point(colour="blue") +
+      geom_hline(yintercept = 0) +
+      geom_vline(xintercept = 2020.5, linetype="dotted") +
+      geom_hline(aes(yintercept=avg$avg), colour="red", size=0.4) +
+      scale_y_continuous(name="State % change minus US % change", breaks=seq(-10, 10, 1)) +
+      scale_x_continuous(name="State fiscal year", breaks=seq(1980, 2050, 5)) +
+      ggtitle(paste0("Nominal GDP growth: ", st, " minus nation, Moody's December 2020 forecast"),
+              subtitle=paste0("Red horizontal line is average over ", avgstart, "-", avgend,
+                              ". Dotted vertical line marks break between history and forecast.")) +
+      theme_bw()
+  # df
+}
+
+
+```
+
+
+```{r osr_functions}
+
+gdp_osr_plot <- function(st){
+  recuse <- recessions %>%
+  filter(rec_year > 1978)
+
+  p <- gdposr_pch %>%
+    filter(stabbr==st, year >=1978) %>%
+    ggplot(aes(year, pch, colour=name)) +
+      geom_line() +
+      geom_point() +
+      scale_colour_manual(values=c("blue", "darkgreen")) +
+      geom_hline(yintercept = 0) +
+      annotate("rect",
+             fill = "lightgrey",
+             alpha = 0.5, # larger alpha is darker rectangle
+             xmin = recuse$peak_decimal, xmax = recuse$trough_decimal,
+             ymin = -Inf, ymax = Inf) +
+      scale_x_continuous(name=NULL, breaks=seq(1960, 2030, 5)) +
+      scale_y_continuous(name="% change vs. year ago", breaks=seq(-50, 50, 10)) +
+      theme_bw() +
+      theme(legend.title = element_blank())
+  p
+}
+
+
+
+
+```
+
+
+
+```{r report_function}
+# define the functions we want to call, including titles
+# workaround https://github.com/rstudio/rstudio/issues/1795#issuecomment-505779701
+#   use plot.new(), dev.off()
+#  cat('\n\n<!-- -->\n\n') may be needed if there are problems
+
+report <- function(st){
+  stname <- state.name[state.abb == st]
+  
+  cat("\n")
+  cat("## ", stname, "Report\n")
+  
+  cat("\n")
+  cat("### GDP growth for ", stname, "and the US", "\n")
+  print(gdp_comp_plot(st))
+  plot.new()
+  dev.off()
+  
+  cat("\n")
+  cat("### ", stname, " GDP growth minus United States GDP growth \n")
+  print(gdp_diff_plot(st))
+  plot.new()
+  dev.off()
+  cat('\n\n')
+  
+  cat("\n")
+  cat("### ", stname, " state GDP growth and own-source revenue growth \n")
+  print(gdp_osr_plot(st))
+  plot.new()
+  dev.off()
+  cat('\n\n')
+  
+}
+
+```
+
+
+```{r include=TRUE, results='asis', fig.keep='all', fig.show='asis'}
+
+report("MA")
+report("NJ")
+ 
+# p1(st)
+# p2(st)
+
+
+```
+# Capital gains and the income tax
+```{r}
+usgdp <- readRDS(here::here("data", "usgdp_spliced.rds"))
+stgdp <- readRDS(here::here("data", "stgdp_spliced.rds"))
+cg <- readRDS(here::here("data", "uscapgains.rds"))
+sp500 <- read_excel(here::here("data", fn), sheet="cgboyd", skip=3) %>%
+  filter(year >= 1996)
+
+sp500tr3 <- readRDS(here::here("data", "sp500tr.rds"))
+
+usgdp %>%
+  filter(src=="moodys_dec2020p50", year %in% 2010:2030)
+  
+
+cg <- readRDS(here::here("data", "uscapgains.rds"))
+stgdp
+
+st <- "NJ"
+st <- "MA"
+
+df <- stgdp %>%
+  filter(stabbr==st, src=="moodys_dec2020p50") %>%
+  select(stabbr, year, gdp=value) %>%
+  inner_join(cg %>% filter(name=="capgains_lagged") %>% select(year, cglag=value)) %>%
+  inner_join(osr %>% filter(stabbr==st, name=="iit") %>% select(stabbr, year, iit=value))
+
+df2 <- df %>%
+  pivot_longer(cols=-c(year, stabbr)) %>%
+  group_by(name) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+  ungroup
+
+df2 %>%
+  ggplot(aes(year, pch, colour=name)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = 0)
+```
+
+
 
 ```{r}
-# get data
-# look at national-state differences
-dfl <- readRDS(here::here("data", "gdpstus_moodys_dec2020.rds"))
-
-# sts <- c("CA", "CO", "FL", "MA", "NJ","NY", "PA", "IL")
-sts <- c("MA", "NJ")
+# state capital gains
 
 ```
 
+# Analysis for individual states
 
 
-## National growth and state growth
-```{r include=TRUE, fig.width=10, fig.height=6}
-data <- dfl %>%
-  filter(name %in% c("pch", "pchus"), stabbr %in% sts) %>%
-  mutate(name=factor(name, levels=c("pch", "pchus"), labels=c("state", "US")))
 
-data %>%
-  filter(year %in% 2000:2030) %>%
-  ggplot(aes(year, value, colour=name)) +
-  geom_line(size=1) +
-  geom_point() +
-  scale_colour_manual(values=c("blue", "darkgreen")) +
-  # geom_hline(yintercept = 0) +
-  geom_vline(xintercept = 2020.5, linetype="dotted") +
-  scale_y_continuous(name="% change", breaks=seq(-10, 20, 1)) +
-  facet_wrap(~stabbr) +
-  ggtitle("Nominal GDP growth, state fiscal year basis, selected states, Moody's December 2020 forecast",
-          subtitle="Dotted vertial line marks break between history and forecast") +
-  theme_bw()
-
-```
-
-
-## State growth minus national growth
-```{r include=TRUE, fig.width=10, fig.height=6}
-data <- dfl %>%
-  filter(name=="pdelta", stabbr %in% sts)
-
-avgstart <- 2000
-avgend <- 2020
-avgs <- data %>%
-  filter(year %in% avgstart:avgend) %>%
-  group_by(stabbr) %>%
-  summarise(avg=mean(value), .groups="drop")
-
-data %>%
-  filter(year >= 2000, year <= 2030) %>%
-  ggplot(aes(year, value)) +
-  geom_line(colour="blue", size=1) +
-  geom_point(colour="blue") +
-  geom_hline(yintercept = 0) +
-  geom_vline(xintercept = 2020.5, linetype="dotted") +
-  geom_hline(aes(yintercept=avg), colour="red", size=0.4, data=avgs) +
-  scale_y_continuous(name="State % change minus US % change", breaks=seq(-10, 10, 1)) +
-  scale_x_continuous(name="State fiscal year", breaks=seq(1980, 2050, 5)) +
-  facet_wrap(~stabbr, ncol=2, scales="fixed") +
-  ggtitle("Nominal GDP growth: State minus nation, selected states, Moody's December 2020 forecast",
-          subtitle=paste0("Red horizontal line is average over ", avgstart, "-", avgend,
-                          ". Dotted vertial line marks break between history and forecast.")) +
-  theme_bw()
-```
 
 
 # OSR history and forecasts
 
-```{r get_data}
+```{r OLD_get_data}
 usgdp <- readRDS(here::here("data", "usgdp_spliced.rds"))
 stgdp <- readRDS(here::here("data", "stgdp_spliced.rds"))
-osr <- readRDS(here::here("data", "osr_census_updated.rds")) # ends 2020
+cg <- readRDS(here::here("data", "uscapgains.rds"))
+
+osr <- readRDS(here::here("data", "osr_census_updated.rds")) %>% # ends 2020
+  mutate(value=value / 1000)  %>% # put in $ millions
+  arrange(stabbr, name, year) %>%
+  group_by(stabbr, name) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+  ungroup
+
+osr_pctgdp <- readRDS(here::here("data", "osr_pctgdp.rds"))
+
+targets <- osr_pctgdp %>%
+  pivot_longer(cols=starts_with("p"), values_to = "targetpct", names_to = "ma_years") %>%
+  mutate(ma_years=str_sub(ma_years, 2, -1) %>% as.integer)
+targets
 
 ```
 
 
-```{r get_assumptions}
+```{r get_assumptions2}
 fn <- "assumptions.xlsx"
+
 assume <- read_excel(here::here("data", fn), sheet="osr_forecasts") %>%
-  filter(!is.na(stabbr))
+  filter(!is.na(stabbr)) %>%
+  # convert to percentage
+  mutate(across(c(iit, cit, gst, othertax, nontax), ~ . * 100))
 assume
 
-# forecast 2021
+assumecg <- read_excel(here::here("data", fn), sheet="cgboyd", skip=3) %>%
+  filter(year >= 1996)
+assumecg
+
+```
+
+
+```{r parameters}
+# use these as function inputs
+st <- "NJ"
+
 natfc <- "cbo_jul2020"
+
 stfc <- "ols_sep2020"  # for NJ
 
-
-
-
-nontax_growth2021 <- 0  # must assume as we don't have a forecast, NJ growth rate
 pctgdp_years <- 3 # number of years we use to determine osr target pct of gdp
 recover_years <- 4  # number of years from trough to return to target % of gd p
 
 gov_forecast <- "govaugxleg"  # govbmxleg, govaugxleg, olssepxleg
 
-osrvars <- c("iit", "gst", "cit", "othertax", "nontax") # define the desired order
+ # define the desired order
 
 keyvars <- c("cit_census", "gst_census", "iit_census", "othertax_census",
            "nontax_census", "osr_census", "gdp_beaspliced")
 
-```
-
-
-
-
-
-# OLDER stuff
-
-```{r output, echo=FALSE, include=TRUE, results="asis", eval=FALSE}
-# https://stackoverflow.com/questions/36373630/how-to-create-a-loop-that-includes-both-a-code-chunk-and-text-with-knitr-in-r
-# to loop, need:
-#  include=TRUE, results="asis"
-#  2 spaces before \n
-
-# echo=FALSE, fig.keep = 'all',  results = 'asis',  message=FALSE, warning=FALSE, comment =NA, fig.align='center', fig.height=6.5,  fig_width=10
-
-vars <- c("a", "b", "c")
-
-for (var in vars) {
-  cat("  \n")
-  cat("#",var,"\n")
-}
-
-
-```  
-
-
-```{r outputs2, fig.width=6, echo=FALSE, include=TRUE, message=FALSE, results="asis", eval=FALSE}
-library(pander)
-
-vars <- c("st1", "st2", "st3")
-
-for (var in vars) {
-  # Inserts Month titles
-  pander::pandoc.header(var, level = 2)
-  # Section contents
-  cat(paste0("Some text about state ", var))
-  # plot(pressure)
-  # adding also empty lines, to be sure that this is valid Markdown
-  pander::pandoc.p('')
-  pander::pandoc.p('')
-}
-
-
-# for (i in unique(airquality$Month)) {
-#    # Inserts Month titles
-#    pander::pandoc.header(month.name[i], level = 3)
-#    # Section contents
-#    plot(airquality[airquality$Month == i,])
-#    # adding also empty lines, to be sure that this is valid Markdown
-#    pander::pandoc.p('')
-#    pander::pandoc.p('')
-# }
-```
-
-
-
-# NJ forecast - results
-
-
-```{r parameters, include=FALSE}
-nontax_growth2021 <- 0  # must assume as we don't have a forecast, NJ growth rate
-pctgdp_years <- 3 # number of years we use to determine osr target pct of gdp
-recover_years <- 4  # number of years from trough to return to target % of gd p
-
-gov_forecast <- "govaugxleg"  # govbmxleg, govaugxleg, olssepxleg
-
-osrvars <- c("iit", "gst", "cit", "othertax", "nontax") # define the desired order
-
-keyvars <- c("cit_census", "gst_census", "iit_census", "othertax_census",
-           "nontax_census", "osr_census", "gdp_beaspliced")
 
 ```
 
 
 ```{r}
-# year value src name
-usgdp <- readRDS(here::here("data", "usgdp_spliced.rds"))
-stgdp <- readRDS(here::here("data", "stgdp_spliced.rds"))
+# first construct the short-term state forecasts for nontax revenue -- set equal to state gdp growth
+# define the state-govtforecasts we want
 
-gdp <- stgdp %>%
-  rename(stgdp=value) %>%
-  left_join(usgdp %>% select(year, src, usgdp=value),
-             by = c("year", "src")) %>%
-  select(src, stabbr, year, usgdp, stgdp) %>%
-  arrange(src, stabbr, year)
+stforecasts <- tribble(
+  ~stabbr, ~govsrc,
+  "NJ", "ols_sep2020",
+  "NJ", "gov_bmxleg",  # baseline
+  "MA", "bhi_oct2020",
+  "MA", "boyd_baseline"  # baseline
+)
 
-# tax data Census
-# assumptions
-
-# and then go!
-
-# cat("\n\n", "# Data Cleaning - Outputs", "\n\n")
-
-```
-
-
-
-```{r OLD_getdata, include=FALSE}
-combo <- readRDS(here::here("data", "combo.rds"))
-
-combotab <- combo %>%
-  group_by(fullname) %>%
-  summarise(n=n(),
-            n_notNA=sum(!is.na(value)),
-            first_year=min(year),
-            last_year=max(year),
-            nyears=last_year - first_year + 1,
-            nstates=length(unique(stabbr)),
-            nus=sum(stabbr=="US", na.rm = TRUE),
-            nnj=sum(stabbr=="NJ", na.rm = TRUE),
-            minval=min(value, na.rm=TRUE),
-            maxval=max(value, na.rm=TRUE),
-            .groups="drop") %>%
-  select(fullname, n, n_notNA, nyears, everything())
-combotab
+assume_long <- assume %>%
+  # filter(year==2021) %>%
+  right_join(stforecasts, by = c("stabbr", "govsrc")) %>%
+  left_join(stgdp %>% 
+              filter(src==natfc, year==2021) %>%
+              select(stabbr, year, gdppch=pch), 
+            by = c("stabbr", "year")) %>%
+  mutate(nontax=ifelse(is.na(nontax), gdppch, nontax)) %>%
+  select(-gdppch) %>%
+  pivot_longer(-c(stabbr, year, govsrc))
+assume_long
 
 ```
 
 
-```{r gov_forecasts, include=FALSE}
-# we need 2021 growth rates for each source
-# note that we just need iit, gst, cit, othertax, and nontax growth rates
-# we'll compute total growth rates and osr growth rates
+```{r}
+# construct dataframe that will hold forecasts
+osrvars <- c("iit", "gst", "cit", "othertax", "nontax")
 
-# govaugxleg and olssepxleg are possible forecasts
-taxgrowth <- combo %>%
-  filter(str_detect(fullname, "xleg")) %>%
-  group_by(src, name) %>%
-  arrange(year) %>%
+# create a base data frame with years, states, nat forecasts, and osr variables
+
+base <- expand_grid(year=unique(stgdp$year),
+                    stabbr=unique(stgdp$stabbr),
+                    src=unique(stgdp$src),
+                    name=osrvars)
+
+fcbase <- base %>%
+  left_join(usgdp %>% rename(usgdp=value, usgdp_pch=pch), by=c("year", "src")) %>%
+  left_join(stgdp %>% rename(stgdp=value, stgdp_pch=pch), by = c("year", "stabbr", "src")) %>%
+  left_join(osr %>% 
+              filter(name %in% osrvars) %>%
+              rename(rev=value, rev_pch=pch), 
+            by = c("year", "stabbr", "name"))
+
+summary(fcbase)
+count(fcbase, stabbr)
+count(fcbase, src)
+count(fcbase, name)
+
+```
+
+
+```{r fc_2021}
+fcdf <- fcbase %>%
+  filter(stabbr %in% stforecasts$stabbr) %>% 
+  left_join(assume_long %>% 
+              select(stabbr, govsrc, name, value),
+            by = c("stabbr", "name")) %>%
+  mutate(rev_pch=ifelse(year==2021, value, rev_pch)) %>%
+  group_by(src, govsrc, stabbr, name) %>%
+  mutate(rev=ifelse(year==2021, rev[year==2020] * (1 + rev_pch / 100), rev),
+         pctgdp=rev / stgdp * 100) %>%
+  ungroup %>%
+  select(-value)
+
+fcdf %>% 
+  filter(stabbr=="MA", year %in% 2018:2022, name %in% c("iit", "gst", "cit")) %>% 
+  arrange(src, stabbr, name, year)
+
+count(fcdf, src)count(fcdf, src)count(fcdf, src)
+count(fcdf, govsrc)
+
+```
+
+
+```{r fc_interim}
+# construct state osr forecasts for 2021 through end of interim period
+# method 1: get growth rates for  recovery years assuming we want to revert to pct gdp
+
+fcdf2 <- fcdf %>%
+  left_join(targets %>% 
+              filter(ma_years==1) %>% 
+              select(-year),
+            by=c("stabbr", "name")) %>%
+  group_by(stabbr, src, name) %>%
+  mutate(initial_gap=ifelse(year %in% 2021:(2021 + recover_years), targetpct - pctgdp[year==2021], 0),
+         years_past = ifelse(year %in% 2021:(2021 + recover_years), year - 2021, 0),
+         increment=initial_gap * years_past / recover_years,
+         rev=ifelse(year >= 2021, 
+                    (targetpct - initial_gap + increment) / 100 * stgdp,
+                    rev),
+         pctgdp=rev / stgdp * 100)
+# recover_years
+fcdf2 %>% 
+  filter(src=="cbo_jul2020", stabbr=="MA", year %in% 2019:2026, name %in% c("iit")) %>% 
+  arrange(src, stabbr, name, year)
+
+
+```
+
+
+```{r fc_final}
+# now compute tottax and osr
+fcdf3 <- fcdf2 %>%
+  select(year, stabbr, src, govsrc, name, usgdp, usgdp_pch, stgdp, stgdp_pch, rev) %>%
+  pivot_wider(names_from = name, values_from = rev) %>%
+  mutate(tottax=naz(iit) + naz(gst) + naz(cit) + naz(othertax),
+         osr=tottax + naz(nontax)) %>%
+  pivot_longer(cols=c(iit, gst, cit, othertax, tottax, nontax, osr)) %>%
+  group_by(stabbr, src, name) %>%
   mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
   ungroup %>%
-  filter(year == 2021) %>%
-  select(year, name, pch, src) %>%
-  pivot_wider(values_from = pch)
-
-# add the nontax growth rate
-taxgrowth <- taxgrowth %>%
-  mutate(nontax=nontax_growth2021)
-
-taxgrowth
-
-taxgrowth_long <- taxgrowth %>%
-  pivot_longer(-c(year, src), values_to = "pch")
-
-```
+  arrange(src, stabbr, name, year)
 
 
-
-```{r osr_LR_target, include=FALSE}
-
-# Compute long-run target revenue as % of gsp
-
-pctgdp <- combo %>%
-  filter(fullname %in% keyvars, stabbr=="NJ", year >= 1964, year <= 2019) %>% # so we always have gdp
-  select(year, name, value) %>%
-  group_by(year) %>%
-  mutate(gdp=value[name=="gdp"], 
-         pctgdp=value / gdp * 100) %>%
-  filter(name != "gdp") %>%
-  group_by(name) %>%
-  arrange(year) %>%
-  mutate(mapct=ma(pctgdp, n=pctgdp_years)) %>%
-  select(year, name, mapct) %>%
-  pivot_wider(values_from = mapct)
-
-# pctgdp %>%
-#   filter(year >= 1980) %>%
-#   pivot_longer(-year) %>%
-#   filter(!name %in% c("osr")) %>%
-#   ggplot(aes(year, value, colour=name)) +
-#   geom_line() +
-#   geom_point()
-
-targets <- pctgdp %>%
-  filter(year==max(year)) %>%
-  pivot_longer(-year, values_to = "targetpct")
-targets
+# look
+fcsts <- c("cbo_precovid", "fed_alt", "moodys_dec2020p50")
+fcdf3 %>%
+  filter(stabbr=="NJ", name=="osr", src %in% fcsts, year >= 2010) %>%
+  ggplot(aes(year, value, colour=src)) +
+  geom_line() +
+  geom_point()
 
 ```
 
@@ -519,6 +770,189 @@ fc_wide <- fcast %>%
 
 
 ```
+
+
+
+
+
+
+# history growth tax nontax gdp
+```{r nontax_analysis}
+df <- stgdp %>%
+  filter(stabbr==st, src=="cbo_jul2020") %>%
+  mutate(name="gdp") %>%
+  bind_rows(osr %>% filter(stabbr==st, name %in% c("tottax", "nontax"))) %>%
+  filter(year %in% 1990:2018) %>%
+  group_by(name) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+  ungroup %>%
+  select(-src, -value)
+
+# does a simple regression tell us whether nontax is more closely associated with gdp or tottax? NO
+# dfw <- df %>%
+#   pivot_wider(values_from = pch)
+# summary(lm(nontax ~ tottax, data=dfw))
+# summary(lm(nontax ~ gdp, data=dfw))  # coeff on gdp clearly not signif diff from 1
+# 
+# 
+# summary(lm(nontax ~ tottax, data=dfw %>% filter(!year %in% c(1992, 2003, 2004))))
+# summary(lm(nontax ~ gdp, data=dfw %>% filter(!year %in% c(1992, 2003, 2004))))
+
+df %>%
+  ggplot(aes(year, pch, colour=name)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks=seq(1990, 2020, 5)) +
+  scale_y_continuous(breaks=seq(-40, 50, 5)) +
+  geom_hline(yintercept = 0)
+
+
+```
+
+
+
+
+# OLDER stuff
+
+```{r output, echo=FALSE, include=TRUE, results="asis", eval=FALSE}
+# https://stackoverflow.com/questions/36373630/how-to-create-a-loop-that-includes-both-a-code-chunk-and-text-with-knitr-in-r
+# to loop, need:
+#  include=TRUE, results="asis"
+#  2 spaces before \n
+
+# echo=FALSE, fig.keep = 'all',  results = 'asis',  message=FALSE, warning=FALSE, comment =NA, fig.align='center', fig.height=6.5,  fig_width=10
+
+vars <- c("a", "b", "c")
+
+for (var in vars) {
+  cat("  \n")
+  cat("#",var,"\n")
+}
+
+
+```  
+
+
+```{r outputs2, fig.width=6, echo=FALSE, include=TRUE, message=FALSE, results="asis", eval=FALSE}
+library(pander)
+
+vars <- c("st1", "st2", "st3")
+
+for (var in vars) {
+  # Inserts Month titles
+  pander::pandoc.header(var, level = 2)
+  # Section contents
+  cat(paste0("Some text about state ", var))
+  # plot(pressure)
+  # adding also empty lines, to be sure that this is valid Markdown
+  pander::pandoc.p('')
+  pander::pandoc.p('')
+}
+
+
+# for (i in unique(airquality$Month)) {
+#    # Inserts Month titles
+#    pander::pandoc.header(month.name[i], level = 3)
+#    # Section contents
+#    plot(airquality[airquality$Month == i,])
+#    # adding also empty lines, to be sure that this is valid Markdown
+#    pander::pandoc.p('')
+#    pander::pandoc.p('')
+# }
+```
+
+
+
+# NJ forecast - results
+
+
+```{r parameters2, include=FALSE}
+nontax_growth2021 <- 0  # must assume as we don't have a forecast, NJ growth rate
+pctgdp_years <- 3 # number of years we use to determine osr target pct of gdp
+recover_years <- 4  # number of years from trough to return to target % of gd p
+
+gov_forecast <- "govaugxleg"  # govbmxleg, govaugxleg, olssepxleg
+
+osrvars <- c("iit", "gst", "cit", "othertax", "nontax") # define the desired order
+
+keyvars <- c("cit_census", "gst_census", "iit_census", "othertax_census",
+           "nontax_census", "osr_census", "gdp_beaspliced")
+
+```
+
+
+```{r}
+# year value src name
+usgdp <- readRDS(here::here("data", "usgdp_spliced.rds"))
+stgdp <- readRDS(here::here("data", "stgdp_spliced.rds"))
+
+gdp <- stgdp %>%
+  rename(stgdp=value) %>%
+  left_join(usgdp %>% select(year, src, usgdp=value),
+             by = c("year", "src")) %>%
+  select(src, stabbr, year, usgdp, stgdp) %>%
+  arrange(src, stabbr, year)
+
+# tax data Census
+# assumptions
+
+# and then go!
+
+# cat("\n\n", "# Data Cleaning - Outputs", "\n\n")
+
+```
+
+
+
+```{r OLD_getdata, include=FALSE}
+combo <- readRDS(here::here("data", "combo.rds"))
+
+combotab <- combo %>%
+  group_by(fullname) %>%
+  summarise(n=n(),
+            n_notNA=sum(!is.na(value)),
+            first_year=min(year),
+            last_year=max(year),
+            nyears=last_year - first_year + 1,
+            nstates=length(unique(stabbr)),
+            nus=sum(stabbr=="US", na.rm = TRUE),
+            nnj=sum(stabbr=="NJ", na.rm = TRUE),
+            minval=min(value, na.rm=TRUE),
+            maxval=max(value, na.rm=TRUE),
+            .groups="drop") %>%
+  select(fullname, n, n_notNA, nyears, everything())
+combotab
+
+```
+
+
+```{r gov_forecasts, include=FALSE}
+# we need 2021 growth rates for each source
+# note that we just need iit, gst, cit, othertax, and nontax growth rates
+# we'll compute total growth rates and osr growth rates
+
+# govaugxleg and olssepxleg are possible forecasts
+taxgrowth <- combo %>%
+  filter(str_detect(fullname, "xleg")) %>%
+  group_by(src, name) %>%
+  arrange(year) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+  ungroup %>%
+  filter(year == 2021) %>%
+  select(year, name, pch, src) %>%
+  pivot_wider(values_from = pch)
+
+# add the nontax growth rate
+taxgrowth <- taxgrowth %>%
+  mutate(nontax=nontax_growth2021)
+
+taxgrowth
+
+taxgrowth_long <- taxgrowth %>%
+  pivot_longer(-c(year, src), values_to = "pch")
+
+```
+
 
 
 ## Tables

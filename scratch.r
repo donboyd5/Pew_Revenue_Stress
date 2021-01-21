@@ -1,4 +1,75 @@
+library(fable)
 
+usgdp %>%
+  filter(src=="moodys_dec2020p50", year %in% 2010:2030)
+  
+
+cg <- readRDS(here::here("data", "uscapgains.rds"))
+stgdp
+
+st <- "NJ"
+st <- "MA"
+
+df <- stgdp %>%
+  filter(stabbr==st, src=="moodys_dec2020p50") %>%
+  select(stabbr, year, gdp=value) %>%
+  inner_join(cg %>% filter(name=="capgains_lagged") %>% select(year, cglag=value)) %>%
+  inner_join(osr %>% filter(stabbr==st, name=="iit") %>% select(stabbr, year, iit=value))
+
+df2 <- df %>%
+  pivot_longer(cols=-c(year, stabbr)) %>%
+  group_by(name) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
+  ungroup
+
+df2 %>%
+  ggplot(aes(year, pch, colour=name)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = 0)
+
+dfwp <- df2 %>%
+  select(stabbr, year, name, pch) %>%
+  pivot_wider(values_from = pch)
+dfwp
+
+dfwv <- df2 %>%
+  select(stabbr, year, name, value) %>%
+  pivot_wider(values_from = value)
+dfwv
+
+
+mod.lm <- lm(iit ~ 0 + gdp + cglag, data=dfwp)
+
+mod.arima <- dfwp %>%
+  as_tsibble(index=year) %>%
+  model(ARIMA(iit ~ gdp + cglag))
+
+mod.arima2 <- dfwp %>%
+  as_tsibble(index=year) %>%
+  model(ARIMA(iit ~ 0 + pdq(0, 0, 0) + gdp + cglag))
+
+modv.arima <- dfwv %>%
+  as_tsibble(index=year) %>%
+  model(ARIMA(iit ~ gdp + cglag))
+
+summary(mod.lm)
+report(mod.arima)
+report(mod.arima2)
+
+report(modv.arima)
+
+
+
+cgmod <- assumecg %>%
+  left_join(usgdp %>% filter(src=="moodys_dec2020p50") %>% select(year, pch) %>% mutate(gdppch=pch / 100)) %>%
+  filter(year %in% 1995:2020) %>%
+  as_tsibble(index=year) %>%
+  model(ARIMA(baseline ~ gdppch + sp500))
+report(cgmod)
+
+cglm <- lm(baseline ~ gdppch + sp500, data=assumecg)
+summary(cglm)
 
 combo %>%
   filter(stabbr=="US", name=="gdp", year %in% 2018:2023) %>%

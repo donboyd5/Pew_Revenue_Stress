@@ -63,6 +63,124 @@ and then combine, putting in nominal $ millions
   +   State capital gains
   
 
+# National and state GDP history from BEA
+
+```{r ONETIME_usgdp_history, eval=FALSE}
+comment(nipa) # NIPA data all tables, Annual, quarterly, and monthly, latest item released: 2020-12-22
+getNIPATable("1.1.5") # nominal gdp
+# A191RC nominal gdp, Gross domestic product, Current Dollars, Level 
+# A191RX real gdp, Gross domestic product, Chained Dollars, Level
+
+nipa %>%
+  filter(str_detect(vdesc, "Gross domestic product"), freq=="Q") %>%
+  select(vname, vdesc) %>%
+  distinct()
+
+# create fiscal year real and nominal gdp
+gdpdata <- nipa %>%
+  filter(vname %in% c("A191RC", "A191RX"), freq=="Q") 
+summary(gdpdata) # 2020q3 is latest; amounts already are in millions
+
+gdphist <- gdpdata %>%
+  filter(date < "2020-07-01") %>%
+  mutate(year=ifelse(month(date) > 6, year(date) + 1, year(date))) %>%
+  group_by(year, vname) %>%
+  summarise(value=mean(value), .groups="drop") %>%
+  mutate(name=case_when(vname=="A191RC" ~ "gdp",
+                        vname=="A191RX" ~ "rgdp",
+                        TRUE ~ "ERROR")) %>%
+  select(year, name, value) %>%
+  pivot_wider() %>%
+  mutate(pgdp=gdp / rgdp) %>%
+  pivot_longer(cols=-c(year)) %>%
+  mutate(stabbr="US",
+         src="nipa")
+summary(gdphist)
+           
+saveRDS(gdphist, here::here("data", "usgdp_history.rds"))
+# tmp <- readRDS(here::here("data", "usgdp_history.rds"))
+# summary(tmp)  # 1947-2020
+# rm(tmp)
+rm(gdpdata, gdphist)
+
+```
+
+
+```{r ONETIME_stgdp_history, eval=FALSE}
+# year, name, value, stabbr, src, fullname
+
+# bea history from quarterly back to 2005, convert to sfy
+dfq <- sgdp.q %>%
+  mutate(year = ifelse(month(date) <= 6, year(date), year(date) + 1)) %>%
+  select(-date) %>%
+  pivot_longer(cols = c(gdp, rgdp)) %>%
+  group_by(stabbr, year, name) %>%
+  summarise(value=mean(value), .groups="drop") %>%
+  mutate(src="bea.q")
+dfq
+
+# bea history from annual 1964-2019, calendar year (we want sfy)
+# convert to July 1 sfy basis
+dfa <- sgdp_spliced.a %>%
+  arrange(year, name) %>%
+  group_by(stabbr, name) %>%
+  mutate(lgdp=value[match(year -1, year)],
+         value=(value + lgdp) / 2,
+         src="bea.a") %>%
+  ungroup() %>%
+  filter(!is.na(value)) %>%
+  select(year, stabbr, value, name, src)
+
+bind_rows(dfq, dfa) %>%
+  # filter(name=="gdp", year >=2000) %>%
+  filter(name=="gdp", stabbr=="MA") %>%
+  ggplot(aes(year, value, colour=src)) +
+  geom_line() +
+  geom_point()
+
+# splice dfq and dfa
+dfa2 <- dfa %>%
+  group_by(stabbr, src, name) %>%
+  mutate(r2005=value / value[year==2005]) %>%  # ratio vs 2005
+  ungroup
+
+dfall <- dfq %>%
+  select(year, stabbr, name, val.q=value) %>%
+  right_join(dfa2 %>% select(year, stabbr, name, r2005, val.a=value),
+            by=c("year", "stabbr", "name")) %>%
+  arrange(name, year) %>%
+  group_by(stabbr, name) %>%
+  mutate(value=ifelse(year >= 2005, val.q, val.q[year==2005]*r2005)) %>%
+  ungroup %>%
+  filter(!is.na(value))
+  
+dfall  
+
+dfall %>%
+  filter(name=="gdp", year>=0, stabbr=="NJ") %>%
+  select(year, val.q, val.a, value) %>%
+  pivot_longer(-year) %>%
+  ggplot(aes(year, value, colour=name)) +
+  geom_line() +
+  geom_point() 
+
+# looks good, save
+dfsave <- dfall %>%
+  filter(stabbr != "US") %>%
+  select(year, name, value, stabbr)
+saveRDS(dfsave, here::here("data", "stgdp_history.rds"))
+summary(dfsave)
+count(dfsave, stabbr) # DC and 50 states
+
+# rm(dfq, dfa, dfa2, dfall, dfsave)
+#  %>%  mutate(value=value / 1000)  # convert from thousands to millions
+
+```
+
+
+# National gdp forecasts
+
+
 ```{r file_notes}
 # files received from Kimberly Burnham Jan 6 and 7 2020
 
@@ -118,7 +236,13 @@ and then combine, putting in nominal $ millions
 #        q=str_sub(yq, -1, -1) %>% as.numeric,
 #        year=ifelse(q >= 3, year + 1, year))
 
-kbfiles <- c("Baseline and Downside Scenario 12_21_20.xlsx",
+
+```
+
+
+```{r}
+
+pewfiles <- c("Baseline and Downside Scenario 12_21_20.xlsx",
              "Moody State Population December 2020.xlsx",
              "Moody's GSP December 2020.xlsx",
              "Moodys State Household Income December 2020.xlsx",
@@ -128,19 +252,89 @@ kbfiles <- c("Baseline and Downside Scenario 12_21_20.xlsx",
 ```
 
 
-## GDP history and forecasts
 
-### Get Moody's latest national and state forecasts
+## National gdp forecasts from Pew "GDP MASTER FILE_20201021.xlsx"
+
+*   CBO pre-COVID
+*   CBO July
+*   Moody's 50th July
+*   Fed Alt Severe
+
+```{r}
+# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
+gdpfn <- "GDP MASTER FILE_20201021.xlsx"
+vnames <- c("cbo_precovid", "cbo_jul2020", "moodys_jul2020p50", "lena_fed", "fedalt")
+
+sfy <- read_excel(here::here("ignore", "pew", gdpfn), 
+                  sheet="GDP", range="A3:A14", col_names = "year")
+# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
+# moodys_jul2020
+gdp <- read_excel(here::here("ignore", "pew", gdpfn), 
+                  sheet="GDP", 
+                   range="G3:K14", col_names=vnames)
+# keep only the FY values, not the Q2 values
+
+gdp_master <- tibble(sfy, gdp) %>%
+  select(-lena_fed) %>%
+  mutate(across(.cols=-year, ~ . * 1000))
+
+```
+
+
+## National GDP forecasts from Moody's July 2020 (p50 and p90) 
+
+*   "Moody's 50 and 90 July.xlsx", sheet: "GDP"
+*   quarterly, convert to state fiscal year
+
+```{r}
+# this first file has history AND forecasts of nominal GDP, quarterly
+# July 2020 baseline and S3 (severe stress scenario), US, 1947q1, 2050q4
+# the baseline is the same as what is in the second file
+
+# Moody's 50 and 90 July.xlsx
+# get Moody's nominal gdp baseline and S3, July
+mfn <- "Moody's 50 and 90 July.xlsx"
+moody <- read_excel(here::here("ignore", "pew", mfn), 
+                    sheet="GDP", range="A6:C421", col_names = c("yq", "moodys50", "moodys90"))
+gdp_moody_jul2020 <- moody %>%
+  mutate(year=str_sub(yq, 1, 4) %>% as.numeric,
+         q=str_sub(yq, -1, -1) %>% as.numeric,
+         year=ifelse(q >= 3, year + 1, year)) %>%
+  group_by(year) %>%
+  summarise(moodys_jul2020p50=mean(moodys50),
+            moodys_jul2020p90=mean(moodys90),
+            .groups="drop") %>%
+  mutate(across(.cols=-year, ~ . * 1000))  # put in $ millions
+summary(gdp_moody_jul2020)
+
+```
+
+
+```{r}
+gdp_master %>%
+  left_join(gdp_moody_jul2020, by="year")
+
+
+```
+
+
+## National GDP forecasts from Moody's December 2020 "Moody's GSP December 2020.xlsx"
+
+*  "Moody's GSP December 2020.xlsx"
+*  construct US as sum of the 50 states plus DC
+
 
 ```{r ONETIME_get_moodysdec2020_from_Kimberly, eval=FALSE}
+# get the quarterly file for the states
+# create state fiscal year data, and national fiscal year data
 
-kbdir <- here::here("ignore", "Kimberly")
-
-# 50 states gdp
-df <- read_excel(here::here(kbdir, "Moody's GSP December 2020.xlsx"))
+#.. get 50 states gdp ----
+fn <- "Moody's GSP December 2020.xlsx"
+df <- read_excel(here::here("ignore", "pew", fn))
 stnames <- as_tibble(df[4, -1] %>% t, 
-                     rownames="abbr") %>%
-  rename(stname=V1)
+                     rownames="abbr",
+                     .name_repair = "minimal") %>%
+  rename(stname=2)
 
 df2 <- df %>%
   rename(date=1) %>%
@@ -155,444 +349,161 @@ df2
 count(df2, stabbr, stname) # 54: 50 states, DC, GU, PR, VI
 summary(df2)
   
-# put the file in format to save
-df3 <- df2 %>%
-  select(stabbr, stname, date, value)
-saveRDS(df3, here::here("data", "gdpq_moodys_dec2020.rds"))
-
-# create a fiscal year file
+#.. create fiscal year file for states ---
 # CAUTION: July 1 fiscal year for all states
-df3 <- readRDS(here::here("data", "gdpq_moodys_dec2020.rds"))
-df4 <- df3 %>%
+df3 <- df2 %>%
+  select(stabbr, stname, date, value) %>%
   mutate(year=year(date),
          year=ifelse(month(date) >= 7, year + 1, year)) %>%
   group_by(stabbr, year) %>%
-  summarise(value=mean(value), .groups = "drop")
-summary(df4)
-count(df4, year)
-df4 %>% filter(is.na(value))
+  summarise(value=mean(value) * 1000, .groups = "drop") # put in $ millions
+summary(df3)
+count(df3, year)
+df3 %>% filter(is.na(value))
+saveRDS(df3, here::here("data", "stgdp_moodys_dec2020.rds"))
 
-# get US totals excluding GU, PR, VI as they are not in for all years
-df5 <- df4 %>%
-  filter(!stabbr %in% c("GU", "PR", "VI"))
-
-# get US totals
-ustot <- df5 %>%
+# .. get US totals DO NOT EXCLUDE GU, PR, VI ----
+ustot <- df3 %>%
+  # filter(!stabbr %in% c("GU", "PR", "VI")) %>%
   group_by(year) %>%
   summarise(value=sum(value), n=n())
 summary(ustot)
 
-# now get the growth rates and diffs
-df6 <- df5 %>%
-  left_join(ustot %>% select(year, us=value), 
-            by="year") %>%
-  arrange(stabbr, year) %>%
-  group_by(stabbr) %>%
-  mutate(pch=value / value[match(year - 1, year)] * 100 - 100,
-         pchus=us / us[match(year - 1, year)] * 100 - 100,
-         pdelta=pch - pchus)
-
-df6 %>%
-  pivot_longer(cols=c(value, pch, pdelta))
-
-dfl <- df6 %>%
-  pivot_longer(cols=-c(stabbr, year))
-saveRDS(dfl, here::here("data", "gdpstus_moodys_dec2020.rds"))
-
-
-```
-
-
-```{r eval=FALSE}
-# look at national-state differences
-dfl <- readRDS(here::here("data", "gdpstus_moodys_dec2020.rds"))
-
-dfl %>%
-  filter(name=="pdelta", stabbr %in% c("MA", "NJ"), year>=2000, year <= 2030) %>%
-  ggplot(aes(year, value, colour=stabbr)) +
-  geom_line() +
-  geom_point() +
-  geom_hline(yintercept = 0) +
-  scale_y_continuous(name="percent", breaks=seq(-10, 10, .5)) +
-  scale_x_continuous(breaks=seq(2000, 2050, 5)) +
-  ggtitle("% growth in state nominal GDP minus % growth in US nominal GDP",
-          subtitle="State fiscal years")
-```
-
-
-## National GDP: get and splice history and forecasts
-
-```{r ONETIME_usgdp_history, eval=FALSE}
-comment(nipa) # NIPA data all tables, Annual, quarterly, and monthly, latest item released: 2020-12-22
-getNIPATable("1.1.5") # nominal gdp
-# A191RC nominal gdp, Gross domestic product, Current Dollars, Level 
-# A191RX real gdp, Gross domestic product, Chained Dollars, Level
-
-nipa %>%
-  filter(str_detect(vdesc, "Gross domestic product"), freq=="Q") %>%
-  select(vname, vdesc) %>%
-  distinct()
-
-# create fiscal year real and nominal gdp
-gdpdata <- nipa %>%
-  filter(vname %in% c("A191RC", "A191RX"), freq=="Q") 
-summary(gdpdata) # 2020q3 is latest; amounts already are in millions
-
-gdphist <- gdpdata %>%
-  filter(date < "2020-07-01") %>%
-  mutate(year=ifelse(month(date) > 6, year(date) + 1, year(date))) %>%
-  group_by(year, vname) %>%
-  summarise(value=mean(value), .groups="drop") %>%
-  mutate(name=case_when(vname=="A191RC" ~ "gdp",
-                        vname=="A191RX" ~ "rgdp",
-                        TRUE ~ "ERROR")) %>%
-  select(year, name, value) %>%
-  pivot_wider() %>%
-  mutate(pgdp=gdp / rgdp) %>%
-  pivot_longer(cols=-c(year)) %>%
-  mutate(stabbr="US",
-         src="nipa",
-         fullname=paste0(name, "_", src))
-           
-saveRDS(gdphist, here::here("data", "usgdp_history.rds"))
-# tmp <- readRDS(here::here("data", "usgdp_history.rds"))
-# summary(tmp)  # 1947-2020
-# rm(tmp)
-rm(gdpdata, gdphist)
-
-```
-
-
-```{r ONETIME_usgdp_forecasts, eval=FALSE}
-# get Moody's, CBO, fedalt gdp forecasts and splice
-
-# this first file has history AND forecasts of nominal GDP, quarterly
-# July 2020 baseline and S3 (severe stress scenario), US, 1947q1, 2050q4
-# the baseline is the same as what is in the second file
-
-# Moody's 50 and 90 July.xlsx
-# get Moody's nominal gdp baseline and S3, July
-mfn <- "Moody's 50 and 90 July.xlsx"
-moody <- read_excel(here::here("ignore", "NJ", mfn), 
-                    sheet="GDP", range="A6:C421", col_names = c("yq", "moodys50", "moodys90"))
-moody2 <- moody %>%
-  mutate(year=str_sub(yq, 1, 4) %>% as.numeric,
-         q=str_sub(yq, -1, -1) %>% as.numeric,
-         year=ifelse(q >= 3, year + 1, year)) %>%
-  group_by(year) %>%
-  summarise(moodys_jul2020p50=mean(moodys50),
-            moodys_jul2020p90=mean(moodys90),
-            .groups="drop") %>%
-  pivot_longer(-year, names_to = "src") %>%
-  mutate(stabbr="US",
-         name="gdp",
-         fullname=paste0(name, "_", src))
-summary(moody2) # amounts are in billions
-
-# this second file has forecasts only; I believe it was prepared by Kimberly Burham
-# the Moody's baseline appears to be the same as in the first file
-
-gdpfn <- "GDP MASTER FILE_20201021.xlsx"
-vnames <- c("cbo_precovid", "cbo_jul2020", "moodys_jul2020p50", "lena_fed", "fed_alt")
-
-sfy <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", range="A3:A14", col_names = "year")
-# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
-# moodys_jul2020
-gdp <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="GDP", 
-                   range="G3:K14", col_names=vnames)
-# keep only the FY values, not the Q2 values
-gdp2 <- tibble(sfy, gdp) %>%
-  mutate(stabbr="US",
-         name="gdp") %>%
-  pivot_longer(-c(year, name, stabbr), names_to = "src") %>%
-  mutate(fullname=paste0(name, "_", src))
-gdp2
-
-# now get real also, in case we need it
-sfy <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="Real GDP", range="A3:A14", col_names = "year")
-# CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
-# moodys_jul2020
-rgdp <- read_excel(here::here("ignore", "NJ", gdpfn), sheet="Real GDP", 
-                   range="G3:K14", col_names=vnames)
-# keep only the FY values, not the Q2 values
-rgdp2 <- tibble(sfy, rgdp) %>%
-  mutate(stabbr="US",
-         name="rgdp") %>%
-  pivot_longer(-c(year, name, stabbr), names_to = "src") %>%
-  mutate(fullname=paste0(name, "_", src))
-rgdp2
-
-
-# check whether nominal gdp is the same in the Moody's file and the second file
-check <- bind_rows(moody2 %>% filter(src == "moodys_jul2020p50") %>% mutate(file="mfile"),
-                   gdp2  %>% filter(src == "moodys_jul2020p50") %>% mutate(file="gfile")) %>%
-  select(year, file, value) %>%
-  pivot_wider(names_from = file) %>%
-  filter(!is.na(gfile)) %>%
-  mutate(diff=gfile - mfile)
-check
-
-# get Moody's Dec 2020 baseline forecast from previously created file from Kimberly
-# make src="moodys_dec2020p50"
-#  year stabbr name src value fullname
-moody_dec2020 <- readRDS(here::here("data", "gdpstus_moodys_dec2020.rds")) %>%
-  filter(name=="us", stabbr=="NY", year>=2019, year<=2030) %>%  # any stabbr will do
-  mutate(src="moodys_dec2020p50",
-         name="gdp",
-         stabbr="US",
-         fullname=paste0(name, "_", src))
-
-
-# get the p90 forecast from the moody's file
-stack <- bind_rows(gdp2, 
-                   rgdp2, 
-                   moody2 %>% 
-                     filter(src == "moodys_jul2020p90", year>=2019, year<=2030),
-                   moody_dec2020) %>%
-  filter(!is.na(value))
-summary(stack) # this is in billions so we don't need to change scale
-
-saveRDS(stack, here::here("data", "usgdp_forecast.rds"))
-rm(mfn, moody, moody2, gdp, gdp2, rgdp, rgdp2, check, stack, sfy, moody_dec2020)
-
-# tmp <- readRDS(here::here("data", "usgdp_forecast.rds"))
-# summary(tmp)
-# count(tmp, src)
-# tmp %>% filter(src=="moodys_jul2020p50")
-# tmp %>%
-#   filter(name=="gdp") %>%
-#   ggplot(aes(year, value, colour=src)) +
-#   geom_line() +
-#   geom_point()
-# rm(tmp)
-#   src                   n
-#   <chr>             <int>
-# 1 cbo_jul2020          24
-# 2 cbo_precovid         24
-# 3 fed_alt              24
-# 4 moodys_dec2020p50    12
-# 5 moodys_jul2020p50    24
-# 6 moodys_jul2020p90    12
-
-
-```
-
-
-
-```{r splice_fn}
-splice_hf <- function(history, forecast, firstyear=NULL){
-  # takes two dataframes, each with year and value
-  # define first year as the maximum year in history, plus 1
-  firstyear <- max(history$year)
-  df <- tibble(year=min(history$year):max(forecast$year)) %>%
-    left_join(history %>% select(year, h=value), by="year") %>%
-    left_join(forecast %>% select(year, f=value), by="year") %>%
-    mutate(src=forecast$src[1],
-           ratio=case_when(year < firstyear ~ 1,
-                           year == firstyear ~ 1,
-                           year > firstyear ~ f / f[match(year - 1, year)],
-                           TRUE ~ NA_real_),
-           cratio=cumprod(ratio),
-           value=ifelse(year <= firstyear, h, h[year==firstyear] * cratio))
-  df %>%
-    select(year, h, f, value, src)
-}
-
-```
-
-
-```{r ONETIME_splice_usgdp}
-ushist <- readRDS(here::here("data", "usgdp_history.rds"))
-usfc <- readRDS(here::here("data", "usgdp_forecast.rds")) %>%
-  filter(name=="gdp", stabbr=="US") %>%
-  mutate(value=value * 1000) %>%  # put in $ millions
-  select(year, src, value)
-
-summary(ushist) # 1947-2020
-summary(usfc)
-count(usfc, name)  # gdp, rgdp
-count(usfc, src)
-
-# group_modify(.data, .f, ..., .keep = FALSE)
-gdph <- ushist %>%
-  filter(name=="gdp", stabbr=="US", src=="nipa") %>%
-  select(year, src, value)
-summary(gdph)
-
-f <- function(src){
-  gdpfc <- usfc %>%
-    filter(src==!!src)
-  splice_hf(gdph, gdpfc) %>%
-    select(year, value, src) %>%
-    mutate(name="gdp")
-}
-
-usgdp_spliced <- map_dfr(unique(usfc$src), f)
-
-saveRDS(usgdp_spliced, here::here("data", "usgdp_spliced.rds"))
-
+gdp_moody_dec2020 <- ustot %>%
+  select(year, moodys_dec2020=value)
 
 
 ```
 
 
 ```{r}
-# look at the national forecasts
+gdp_master %>%
+  select(-moodys_jul2020p50) %>%
+  left_join(gdp_moody_jul2020, by="year") %>%
+  left_join(gdp_moody_dec2020, by="year")
 
-usgdp_spliced <- readRDS(here::here("data", "usgdp_spliced.rds"))
-usgdp_spliced %>%
-  filter(year >= 2015) %>%
-  ggplot(aes(year, value, colour=src)) +
-  geom_line() +
-  geom_point() +
-  ggtitle("National forecasts, nominal GDP, state fiscal year basis")
+# only minimal differences from history in 2019, but substantial differences in 2020
 
 ```
 
 
-## State GDP: get history and construct forecasts using Moody's national-state differences
+## Create combined US gdp file using BEA history where not provided
+```{r}
+gdphist <- readRDS(here::here("data", "usgdp_history.rds"))
 
+usgdp1 <- gdphist %>%
+  filter(name=="gdp") %>%
+  select(year, gdphist=value) %>%
+  full_join(gdp_master %>% select(-moodys_jul2020p50), by="year") %>%
+  full_join(gdp_moody_jul2020, by="year") %>%
+  full_join(gdp_moody_dec2020, by="year")
 
-```{r ONETIME_stgdp_history, eval=FALSE}
-# year, name, value, stabbr, src, fullname
+usgdp1 %>% filter(year %in% 2010:2025)
 
-# bea history from quarterly back to 2005, convert to sfy
-dfq <- sgdp.q %>%
-  mutate(year = ifelse(month(date) <= 6, year(date), year(date) + 1)) %>%
-  select(-date) %>%
-  pivot_longer(cols = c(gdp, rgdp)) %>%
-  group_by(stabbr, year, name) %>%
-  summarise(value=mean(value), .groups="drop") %>%
-  mutate(src="bea.q",
-         fullname=paste0(name, "_", src))
-dfq
+usgdp1 %>% filter(year %in% 2010:2025) %>%
+  mutate(ratio=moodys_dec2020 / gdphist * 10000)
 
-# bea history from annual 1964-2019, calendar year (we want sfy)
-# convert to July 1 sfy basis
-dfa <- sgdp_spliced.a %>%
-  arrange(year, name) %>%
-  group_by(stabbr, name) %>%
-  mutate(lgdp=value[match(year -1, year)],
-         value=(value + lgdp) / 2,
-         src="bea.a",
-         fullname=paste0(name, "_", src)) %>%
-  ungroup() %>%
-  filter(!is.na(value)) %>%
-  select(year, stabbr, value, name, src, fullname)
+# replace
+usgdp <- usgdp1 %>%
+  mutate(across(.cols=-c(year, gdphist), ~ ifelse(is.na(.), gdphist, .))) %>%
+  filter(year <= 2030)
 
-bind_rows(dfq, dfa) %>%
-  # filter(name=="gdp", year >=2000) %>%
-  filter(name=="gdp", stabbr=="MA") %>%
-  ggplot(aes(year, value, colour=src)) +
-  geom_line() +
-  geom_point()
-
-# splice dfq and dfa
-dfa2 <- dfa %>%
-  group_by(stabbr, src, name) %>%
-  mutate(r2005=value / value[year==2005]) %>%  # ratio vs 2005
-  ungroup
-
-dfall <- dfq %>%
-  select(year, stabbr, name, val.q=value) %>%
-  right_join(dfa2 %>% select(year, stabbr, name, r2005, val.a=value),
-            by=c("year", "stabbr", "name")) %>%
-  arrange(name, year) %>%
-  group_by(stabbr, name) %>%
-  mutate(value=ifelse(year >= 2005, val.q, val.q[year==2005]*r2005),
-         src="beaspliced",
-         fullname=paste0(name, "_", src)) %>%
-  ungroup %>%
-  filter(!is.na(value))
-  
-dfall  
-
-dfall %>%
-  filter(name=="gdp", year>=0, stabbr=="NJ") %>%
-  select(year, val.q, val.a, value) %>%
+usgdp %>%
+  select(-gdphist) %>%
+  filter(year >= 2015) %>%
   pivot_longer(-year) %>%
   ggplot(aes(year, value, colour=name)) +
   geom_line() +
   geom_point() 
 
-# looks good, save
-dfsave <- dfall %>%
-  select(year, name, value, stabbr, src, fullname)
-saveRDS(dfsave, here::here("data", "stgdp_history.rds"))
-
-rm(dfq, dfa, dfa2, dfall, dfsave)
+saveRDS(usgdp, here::here("data", "usgdp.rds"))
 
 ```
 
 
-```{r ONETIME_splice_stgdp, eval=FALSE}
-# Dec 2020 Moody's state gdp forecast
-# saveRDS(dfsave, here::here("data", "stgdp_history.rds"))
+# State gdp forecasts
 
-usgdp_spliced <- readRDS(here::here("data", "usgdp_spliced.rds"))
+## Get differences in % change Moody's US vs states
+```{r}
+usgdp <- readRDS(here::here("data", "usgdp.rds"))
+mstgdp <- readRDS(here::here("data", "stgdp_moodys_dec2020.rds"))
+stgdphist <- readRDS(here::here("data", "stgdp_history.rds"))
 
-sthist <- readRDS(here::here("data", "stgdp_history.rds")) %>%
-  filter(name=="gdp")
-summary(sthist)  # 1964-2019
+count(mstgdp, stabbr)
 
-histend <- 2019
+pchdiff <- mstgdp  %>% 
+  filter(year <= 2030) %>%
+  left_join(usgdp %>% select(year, us=moodys_dec2020), by = "year") %>%
+  group_by(stabbr) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100,
+         pchus=us / us[match(year - 1, year)] * 100 - 100,
+         pdelta=pch - pchus)
+pchdiff
 
-# get the delta in pct change vs US
-stpdelta <- readRDS(here::here("data", "gdpstus_moodys_dec2020.rds")) %>%
-  filter(name=="pdelta", year >= 2019, year <= 2030) %>%
-  select(stabbr, year, pdelta=value)
-summary(stpdelta)
-
-# now get the % change for each state under each US forecast
-stpch <- usgdp_spliced %>%
-  arrange(src, year) %>%  
-  group_by(src) %>%
-  mutate(pch= value / value[match(year - 1, year)] * 100 -100) %>%
-  ungroup %>%
-  filter(year >= histend) %>%
-  left_join(stpdelta, by=c("year")) %>%
-  mutate(stpch=pch + pdelta) %>%
-  # compute the ratio of each state's value to its value in 2019
-  group_by(src, stabbr) %>%
-  arrange(year) %>%
-  mutate(ipch=ifelse(year==2019, 1, 1 + stpch / 100),
-         r2019=cumprod(ipch)) %>%
-  ungroup %>%
-  arrange(src, stabbr, year)
-stpch  
-
-# get the state gdp forecasts
-stfc <- stpch %>%
-  select(year, stabbr, src, r2019) %>%
-  left_join(sthist %>% filter(year==2019, name=="gdp") %>% select(stabbr, basevalue=value),
-            by="stabbr") %>%
-  mutate(value=basevalue * r2019) %>%
-  select(year, src, stabbr, value)
-
-# now, finally, splice
-
-f <- function(src){
-  bind_rows(sthist %>%
-              select(stabbr, year, value) %>%
-              mutate(src=!!src),
-            stfc)
-}
-
-stgdp_spliced <- map_dfr(unique(stfc$src), f)
-
-stgdp_spliced %>%
-  filter(year >= 2015, stabbr=="NJ") %>%
-  ggplot(aes(year, value, colour=src)) +
-  geom_line() +
-  geom_point()
-
-saveRDS(stgdp_spliced, here::here("data", "stgdp_spliced.rds"))
+# pchdiff %>% filter(stabbr=="NJ")
 
 
 ```
+
+
+## Apply these % differences to get state gdp forecast for each national forecast (back to 1977)
+
+
+Use BEA history
+And inferred values for 2020 and later
 
 
 ```{r}
+
+uslong <- usgdp %>%
+  pivot_longer(cols=-year, names_to = "src") %>%
+  group_by(src) %>%
+  mutate(pchus=value / value[match(year - 1, year)] * 100 - 100) %>%
+  select(year, src, pchus)
+
+stpch <- uslong %>%
+  filter(src != "gdphist") %>%
+  inner_join(pchdiff %>% 
+               filter(!stabbr %in% c("GU", "PR", "VI"),
+                      year >= 2019) %>%  # first year with pch
+               select(stabbr, year, pdelta),
+             by="year") %>%
+  arrange(stabbr, src, year) %>%
+  group_by(stabbr, src) %>%
+  mutate(pch=pchus + pdelta,
+         ratio=ifelse(year==2019, 1, 1 + pch / 100),
+         ratio2019=cumprod(ratio)) %>%
+  ungroup
+stpch
+
+count(stpch, src)
+stpch %>% filter(stabbr=="NJ", year %in% 2017:2021) %>% arrange(src, year)
+
+
+# apply the ratios to BEA history
+count(stgdphist, name)
+df <- stgdphist %>%
+  filter(name=="gdp") %>%
+  select(year, stabbr, gdphist=value) %>%
+  full_join(stpch %>%
+              select(year, stabbr, src, ratio2019) %>%
+              pivot_wider(names_from=src,
+                          values_from=ratio2019),
+            by = c("year", "stabbr"))
+
+stgdp <- df %>%
+  group_by(stabbr) %>%
+  mutate(across(-c(year, gdphist),
+                ~ ifelse(year < 2019, gdphist, . * gdphist[year==2019]))) %>%
+  ungroup
+
+saveRDS(stgdp, here::here("data", "stgdp.rds"))
+
+```
+
+
+
+```{r OLD}
 # look at national-state differences
 dfl <- readRDS(here::here("data", "gdpstus_moodys_dec2020.rds"))
 
@@ -645,7 +556,7 @@ data %>%
 ```
 
 
-
+# Own-source revenue
 
 ## OSR history and updating to 2020
 
@@ -671,8 +582,6 @@ saveRDS(osr_long, here::here("data", "osr_census.rds"))
 rm(tmp, vars, osr, osr_long)
 
 ```
-
-
 
 
 ```{r ONETIME_qtax_taxgrowth_for20192020}
@@ -706,16 +615,16 @@ taxgrowth <- df %>%
 
 ```{r ONETIME_Moodysgdp_nontaxgrowth_for20192020}
 # for nontax, use 2019 and 2020 gdp growth unless we get other data
+stgdp <- readRDS(here::here("data", "stgdp.rds"))
 
-nontaxgrowth <- readRDS(here::here("data", "gdpstus_moodys_dec2020.rds")) %>%
-  filter(year %in% 2018:2020, name=="value") %>%
-  mutate(ratio=value / value[year==2018],
+nontaxgrowth <- stgdp %>%
+  select(year, stabbr, moodys_dec2020) %>%
+  filter(year %in% 2018:2020) %>%
+  mutate(ratio=moodys_dec2020 / moodys_dec2020[year==2018],
          name="nontax") %>%
   select(year, stabbr, name, ratio)
 
 ```
-
-
 
 
 ```{r ONETIME_OSRupdated, eval=FALSE}
@@ -741,7 +650,8 @@ osrupdate <- bind_rows(osrhist,
   pivot_wider() %>%
   mutate(tottax=ifelse(is.na(tottax), naz(iit) + naz(gst) + naz(cit) + naz(othertax), tottax),
          osr=ifelse(is.na(osr), tottax + nontax, osr)) %>%
-  pivot_longer(cols=-c(stabbr, year))
+  pivot_longer(cols=-c(stabbr, year)) %>%
+  mutate(value = value / 1000)  # put in $ millions
 
 
 st <- "NJ"
@@ -761,23 +671,197 @@ rm(osrhist, taxgrowth, nontaxgrowth, osrupdate)
 
 
 
+## OSR as % of GDP
+```{r ONETIME_osr_gdppct, include=FALSE}
+# Compute long-run target revenue as % of gsp
+stgdp <- readRDS(here::here("data", "stgdp.rds"))
+osr <- readRDS(here::here("data", "osr_census_updated.rds"))  # ends 2020
+
+gdp_base <- stgdp %>%
+  filter(year >= 1990, year <= 2019) %>%
+  select(stabbr, year, gdp=moodys_dec2020)
+
+osr_base <- osr %>%
+  filter(year >= 1990, year <= 2019) %>%
+  mutate(value=naz(value)) %>%
+  select(stabbr, year, name, rev=value)
+
+pctgdp <- left_join(osr_base, gdp_base, by = c("stabbr", "year")) %>%
+  mutate(pctgdp=rev / gdp * 100) %>%
+  arrange(stabbr, name, year) %>%
+  group_by(stabbr, name) %>%
+  mutate(p1=ma(pctgdp, 1),
+         p2=ma(pctgdp, 2),
+         p3=ma(pctgdp, 3),
+         p4=ma(pctgdp, 4),
+         p5=ma(pctgdp, 5),
+         p10=ma(pctgdp, 10)) %>%
+  filter(year==2019) %>%
+  select(year, stabbr, name, p1:p10) %>%
+  ungroup
+
+pctgdp %>% filter(stabbr=="NJ")
+pctgdp %>% filter(stabbr=="MA")
+  
+saveRDS(pctgdp, here::here("data", "osr_pctgdp.rds"))
+
+```
+
+
+
 # Other data
+
+## S&P 500 total returns
+```{r ONETIME_sp500tr}
+sp500tr <- getSymbols('^SP500TR', 
+                      src='yahoo', 
+                      from = "1990-01-01",
+                      periodicity = "daily",
+                      auto.assign=FALSE) %>%
+  as_tibble(rownames="date") %>%
+  setNames(str_to_lower(names(.)))
+
+sp500tr2 <- sp500tr %>%
+  mutate(year=year(date)) %>%
+  group_by(year) %>%
+  filter(date==max(date)) %>%
+  ungroup %>%
+  mutate(pch=sp500tr.adjusted / sp500tr.adjusted[match(year - 1, year)] * 100 - 100)
+
+sp500tr3 <- sp500tr2 %>%
+  select(year, sp500tr=sp500tr.adjusted, pch)
+
+saveRDS(sp500tr3, here::here("data", "sp500tr.rds"))
+
+```
+
+
+```{r ONETIME_equities}
+sp500 <- readRDS(here::here("data", "sp500tr.rds")) %>% # CY
+  filter(year <= 2020)
+
+usequity <- read_excel(here::here("ignore", "boyd", "finance.xlsx"), sheet="usequity")
+# compute usequity growth vs 2019
+
+usequity2 <- usequity %>%
+  filter(year >= 2021) %>%
+  mutate(across(.cols=-year, ~ cumprod(1 + .)))
+
+equity_fc <- sp500 %>%
+  select(-pch) %>%
+  full_join(usequity2) %>%
+  mutate(across(c(pew_covidbase, pew_fedalt), ~ ifelse(year <= 2020, sp500tr, sp500tr[year==2020] * .)))
+
+equity_fc %>%
+  select(-sp500tr) %>%
+  pivot_longer(-year) %>%
+  ggplot(aes(year, value, colour=name)) +
+  geom_line() +
+  geom_point()
+
+```
+
+
 
 ## Capital gains
 
+We have capgains under:
+
+*   CBO pre-covid (Jan 2020)
+*   CBO July-ish (sep 2020)
+*   fedalt (we will construct)
+
+
 ```{r ONETIME_uscapgains, eval=FALSE}
-fn <- "Boyd NJ OSR(3).xlsx"
-df <- read_excel(here::here("ignore", "NJ", fn), sheet="capgains")
-capgains <- df %>%
-  select(year, capgains=cbospliced) %>%
-  arrange(year) %>%
-  mutate(capgains_lagged=lag(capgains)) %>%
-  pivot_longer(-c(year)) %>%
-  mutate(src="CBO_sep2020",
-         fullname=paste0(name, "_", src))
+usgdp <- readRDS(here::here("data", "usgdp.rds"))
+capgains1 <- read_excel(here::here("ignore", "boyd", "finance.xlsx"), sheet="capgains")
+
+capgains <- capgains1 %>%
+  select(year, cbo_precovid=cbojan2020, cbo_jul2020=cbospliced)
 ht(capgains)
-saveRDS(capgains, here::here("data", "uscapgains.rds"))
-rm(fn, df, capgains)
+
+# forecast capgains variants using usgdp and sp500
+# estimate through 2019
+cgest <- usgdp %>%
+  filter(year >= 1995, year <= 2019) %>%
+  select(year, gdp=moodys_dec2020) %>%
+  mutate(gdp=gdp / 1e3) %>%
+  left_join(capgains %>% select(year, cg=cbo_jul2020), by = "year") %>%
+  left_join(equity_fc %>% select(year, sp500tr), by = "year")
+
+# fit a capital gains model
+mod <- cgest %>%
+  as_tsibble(index=year) %>%
+  filter(year <= 2019) %>%
+  model(ARIMA(cg ~ gdp + sp500tr))
+# report(mod)
+# glance(mod)
+# mod %>%
+#   gg_tsresiduals()
+
+saveRDS(mod, here::here("data", "cgmodel.rds"))
+
+# show the fit
+mod %>% 
+  augment() %>%
+  select(year, cg, fit=.fitted) %>%
+  pivot_longer(-year) %>%
+  ggplot(aes(year, value, colour=name)) +
+  geom_line() +
+  geom_point() +
+  ggtitle("Model fit for capital gains") +
+  theme_bw()
+
+# prepare fcbase, with data needed to forecast cap gains for each econ-sp500 combination
+gdpl <- usgdp %>%
+  filter(year >= 1995) %>%
+  select(-gdphist) %>%
+  mutate(across(-year, ~ . / 1e3)) %>%
+  pivot_longer(-year, values_to="gdp")
+
+eql <- equity_fc %>%
+  select(-sp500tr) %>%
+  pivot_longer(cols=-year, values_to="sp500tr")
+
+fcbase <- gdpl %>%
+  filter(year %in% 1995:2030) %>%
+  rename(gdpname=name) %>%
+  full_join(eql %>%
+              filter(year %in% 1995:2030) %>%
+              rename(eqname=name),
+            by = "year")
+fcbase
+
+# forecast capital gains
+f <- function(df){
+  # forecast for a single group
+  df %>%
+    as_tsibble(index=year) %>%
+    forecast(mod, new_data=.) 
+}
+
+cgfcast <- fcbase %>%
+  group_by(gdpname, eqname) %>%
+  group_modify(~ f(.x)) %>%
+  ungroup %>%
+  rename(cgfcast=.mean)
+
+count(cgfcast, gdpname, eqname)
+
+cgfcast %>%
+  filter(year >= 2015) %>%
+  filter((gdpname=="cbo_precovid" & eqname=="pew_covidbase") |
+         (gdpname=="cbo_jul2020" & eqname=="pew_covidbase") |
+         (gdpname=="moodys_dec2020" & eqname=="pew_covidbase") |
+         (gdpname=="fedalt" & eqname=="pew_covidbase") |
+         (gdpname=="fedalt" & eqname=="pew_fedalt")) %>%
+  mutate(grp=paste0(gdpname, "-", eqname)) %>%
+  ggplot(aes(year, cgfcast, colour=grp)) +
+  geom_line() +
+  geom_point()
+           
+saveRDS(cgfcast, here::here("data", "cgfcast.rds"))
+
 
 ```
 
@@ -802,6 +886,8 @@ saveRDS(capgains_state, here::here("data", "statecapgains.rds"))
 rm(ht2, capgains_state)
 
 ```
+
+
 
 
 
