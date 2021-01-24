@@ -85,7 +85,8 @@ gdphist <- gdpdata %>%
   filter(date < "2020-07-01") %>%
   mutate(year=ifelse(month(date) > 6, year(date) + 1, year(date))) %>%
   group_by(year, vname) %>%
-  summarise(value=mean(value), .groups="drop") %>%
+  summarise(n=n(), value=mean(value), .groups="drop") %>%
+  filter(n == 4) %>%
   mutate(name=case_when(vname=="A191RC" ~ "gdp",
                         vname=="A191RX" ~ "rgdp",
                         TRUE ~ "ERROR")) %>%
@@ -109,13 +110,15 @@ rm(gdpdata, gdphist)
 ```{r ONETIME_stgdp_history, eval=FALSE}
 # year, name, value, stabbr, src, fullname
 
-# bea history from quarterly back to 2005, convert to sfy
+# bea history from quarterly back to 2006, convert to sfy
 dfq <- sgdp.q %>%
   mutate(year = ifelse(month(date) <= 6, year(date), year(date) + 1)) %>%
   select(-date) %>%
   pivot_longer(cols = c(gdp, rgdp)) %>%
   group_by(stabbr, year, name) %>%
-  summarise(value=mean(value), .groups="drop") %>%
+  summarise(n=n(),
+            value=mean(value), .groups="drop") %>%
+  filter(n==4) %>%
   mutate(src="bea.q")
 dfq
 
@@ -124,6 +127,7 @@ dfq
 dfa <- sgdp_spliced.a %>%
   arrange(year, name) %>%
   group_by(stabbr, name) %>%
+  # average gdp over 2 years
   mutate(lgdp=value[match(year -1, year)],
          value=(value + lgdp) / 2,
          src="bea.a") %>%
@@ -141,16 +145,16 @@ bind_rows(dfq, dfa) %>%
 # splice dfq and dfa
 dfa2 <- dfa %>%
   group_by(stabbr, src, name) %>%
-  mutate(r2005=value / value[year==2005]) %>%  # ratio vs 2005
+  mutate(r2006=value / value[year==2006]) %>%  # ratio vs 2006
   ungroup
 
 dfall <- dfq %>%
   select(year, stabbr, name, val.q=value) %>%
-  right_join(dfa2 %>% select(year, stabbr, name, r2005, val.a=value),
+  right_join(dfa2 %>% select(year, stabbr, name, r2006, val.a=value),
             by=c("year", "stabbr", "name")) %>%
   arrange(name, year) %>%
   group_by(stabbr, name) %>%
-  mutate(value=ifelse(year >= 2005, val.q, val.q[year==2005]*r2005)) %>%
+  mutate(value=ifelse(year >= 2006, val.q, val.q[year==2006]*r2006)) %>%
   ungroup %>%
   filter(!is.na(value))
   
@@ -277,6 +281,7 @@ gdp <- read_excel(here::here("ignore", "pew", gdpfn),
 gdp_master <- tibble(sfy, gdp) %>%
   select(-lena_fed) %>%
   mutate(across(.cols=-year, ~ . * 1000))
+gdp_master  # good, no missing values
 
 ```
 
@@ -301,9 +306,12 @@ gdp_moodys_jul2020 <- moodys %>%
          q=str_sub(yq, -1, -1) %>% as.numeric,
          year=ifelse(q >= 3, year + 1, year)) %>%
   group_by(year) %>%
-  summarise(moodys_jul2020p50=mean(moodys50),
+  summarise(n=n(),
+            moodys_jul2020p50=mean(moodys50),
             moodys_jul2020p90=mean(moodys90),
             .groups="drop") %>%
+  filter(n == 4) %>%
+  select(-n) %>%
   mutate(across(.cols=-year, ~ . * 1000))  # put in $ millions
 summary(gdp_moodys_jul2020)
 
@@ -333,14 +341,11 @@ get_moodys <- function(fname, vname){
                        year(date))) %>%
     group_by(year) %>%
     summarise(n=n(), value=mean(value)) %>%
-    mutate(value=ifelse(n < 4, NA_real_, value),
-           value=value * 1000)
-
-  df3 <- df2 %>%
-    filter(!is.na(value)) %>%
+    filter(n==4) %>%
+    mutate(value=value * 1000) %>%
     select(year, !!vname:=value)
   
-  df3
+  df2
 }
 
 
@@ -378,7 +383,7 @@ df %>%
   scale_y_continuous(breaks=seq(0, 10, 0.5)) +
   ggtitle("Moody's December 2020 forecasts: National and sum of states (including DC, PR, GU, VI") +
   theme_bw()
-# state sum is about 0.25% faster growth for two quarters, then a smaller increment
+# state sum is about 0.25% faster growth for two years, then ~0.2% faster or a little less
 
 ```
 
@@ -421,7 +426,9 @@ df3 <- df2 %>%
   mutate(year=year(date),
          year=ifelse(month(date) >= 7, year + 1, year)) %>%
   group_by(stabbr, year) %>%
-  summarise(value=mean(value) * 1000, .groups = "drop") # put in $ millions
+  summarise(n=n(), value=mean(value) * 1000, .groups = "drop") %>% # put in $ millions
+  filter(n==4, !is.na(value))  %>% # the NAs are GU and VI for early years -- drop them
+  select(-n)
 summary(df3)
 count(df3, year)
 df3 %>% filter(is.na(value))
@@ -456,6 +463,7 @@ gdp_master %>%
 ## Create combined US gdp file using BEA history where not provided
 ```{r}
 gdphist <- readRDS(here::here("data", "usgdp_history.rds"))
+summary(gdphist)
 
 usgdp1 <- gdphist %>%
   filter(name=="gdp") %>%
@@ -464,7 +472,7 @@ usgdp1 <- gdphist %>%
   full_join(gdp_moodys_jul2020, by="year") %>%
   full_join(gdp_moodys_dec2019, by="year") %>%
   full_join(gdp_moodys_dec2020, by="year")
-
+summary(usgdp1)
 # gdp_moody_dec2019
 # gdp_moody_dec2020
 
@@ -477,6 +485,7 @@ usgdp1 %>% filter(year %in% 2010:2025) %>%
 usgdp <- usgdp1 %>%
   mutate(across(.cols=-c(year, gdphist), ~ ifelse(is.na(.), gdphist, .))) %>%
   filter(year <= 2030)
+summary(usgdp) # good, the only NAs are gdphist, which is because it does not have forecasts
 
 usgdp %>%
   select(-gdphist) %>%
@@ -584,6 +593,7 @@ vars <- c("osr", "tottax", "gst", "iit", "cit")
 osr <- slgfin %>%
   filter(level==2, aggvar %in% vars) %>%
   select(stabbr, year, aggvar, value) %>%
+  mutate(value=value / 1000) %>% # put in $ millions
   pivot_wider(names_from = aggvar) %>%
   mutate(nontax=osr - tottax,
          othertax=tottax - naz(iit) - naz(gst) - naz(cit)) %>%
@@ -666,8 +676,7 @@ osrupdate <- bind_rows(osrhist,
   pivot_wider() %>%
   mutate(tottax=ifelse(is.na(tottax), naz(iit) + naz(gst) + naz(cit) + naz(othertax), tottax),
          osr=ifelse(is.na(osr), tottax + nontax, osr)) %>%
-  pivot_longer(cols=-c(stabbr, year)) %>%
-  mutate(value = value / 1000)  # put in $ millions
+  pivot_longer(cols=-c(stabbr, year))
 
 
 st <- "NJ"

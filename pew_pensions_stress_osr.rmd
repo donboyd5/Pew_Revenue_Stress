@@ -12,7 +12,7 @@ output:
     toc: yes
     df_print: paged
 editor_options:
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 
@@ -147,8 +147,8 @@ stname <- function(stabbr){
 
 ```{r get_data}
 # get data
-usgdp <- readRDS(here::here("data", "usgdp.rds"))
-stgdp <- readRDS(here::here("data", "stgdp.rds"))
+usgdp <- readRDS(here::here("data", "usgdp.rds"))  # $ millions
+stgdp <- readRDS(here::here("data", "stgdp.rds"))  # $ millions
 
 sp500tr3 <- readRDS(here::here("data", "sp500tr.rds"))
 cg <- readRDS(here::here("data", "uscapgains.rds"))
@@ -156,16 +156,18 @@ cgmodel <- readRDS(here::here("data", "cgmodel.rds"))
 cgfcast <- readRDS(here::here("data", "cgfcast.rds"))
 
 osr <- readRDS(here::here("data", "osr_census_updated.rds")) %>% # ends 2020
-  mutate(value=value / 1000)  %>% # put in $ millions
+  mutate(value=value)  %>% 
   arrange(stabbr, name, year) %>%
   group_by(stabbr, name) %>%
   mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
   ungroup
+summary(osr)  # $ millions
+
 
 osr_pctgdp <- readRDS(here::here("data", "osr_pctgdp.rds"))
 
 targets <- osr_pctgdp %>%
-  pivot_longer(cols=starts_with("p"), values_to = "targetpct", names_to = "ma_years") %>%
+  pivot_longer(cols=starts_with("p"), values_to = "longrun_targetpct", names_to = "ma_years") %>%
   mutate(ma_years=str_sub(ma_years, 2, -1) %>% as.integer)
 # targets
 
@@ -182,39 +184,78 @@ assume <- read_excel(here::here("data", fn), sheet="osr_forecasts") %>%
   mutate(across(c(iit, cit, gst, othertax, nontax), ~ . * 100))
 assume
 
-# assumecg <- read_excel(here::here("data", fn), sheet="cgboyd", skip=3) %>%
-#   filter(year >= 1996)
-# assumecg
+
+```
+
+
+## National economic forecasts
+
+The plots below show:
+
+*   All available nominal GDP forecasts
+*   Pre-Covid forecasts: CBO early 2020 (January?) and Moody's December 2019
+*   Moody's baseline forecasts and how they have changed over time (December 2019, July 2020, December 2020)
+*   Downside Covid forecasts (Moody's July 2020 p90 severe stress scenario, and the Federal reserve alternative fedalt forecast)
+
+The forecasts are on a July-June state fiscal year basis. (Each year ends in June. For example, the 2021 forecast is for the 12 months ending in June 2021.)
+
+
+```{r}
+plot_fc <- function(fcorder, titlepre){
+  usgdp %>%
+    select(year, all_of(fcorder)) %>%
+    filter(year >= 2015) %>%
+    pivot_longer(-year, names_to = "forecast") %>%
+    mutate(forecast=factor(forecast, level=fcorder)) %>%
+    arrange(forecast) %>%
+    ggplot(aes(year, value / 1e3, colour=forecast)) +
+    geom_line(size=1) +
+    geom_point() +
+    scale_y_continuous(name="$ billions", breaks=seq(10e3, 50e3, 2.5e3), labels=scales::comma) +
+    scale_x_continuous(name="State fiscal year", breaks=seq(2010, 2040, 2)) +
+    ggtitle(paste0(titlepre, " national forecasts of nominal GDP, state fiscal year basis")) +
+    theme_bw()
+}
+
+```
+
+
+### All available national forecasts
+```{r include=TRUE, fig.width=10, fig.height=6}
+
+fcorder <- c("cbo_precovid", "moodys_dec2019", "cbo_jul2020", "moodys_jul2020p50",
+             "moodys_dec2020", "moodys_jul2020p90", "fedalt")
+plot_fc(fcorder, "All")
+
+```
+
+
+### Pre-Covid national forecasts
+```{r include=TRUE, fig.width=10, fig.height=6}
+
+fcorder <- c("cbo_precovid", "moodys_dec2019")
+plot_fc(fcorder, "Pre-Covid") +
+  scale_colour_manual(values=c("blue", "darkgreen"))
+
+```
+
+
+### Moody's baseline (i.e., considered most likely) national forecasts
+```{r include=TRUE, fig.width=10, fig.height=6}
+
+fcorder <- c("moodys_dec2019", "moodys_jul2020p50", "moodys_dec2020")
+plot_fc(fcorder, "Moody's baseline")
 
 ```
 
 
 
-## National economic forecasts
+### Downside Covid national forecasts
+```{r include=TRUE, fig.width=10, fig.height=6}
 
-The plot below shows available nominal GDP forecasts on a July-June state fiscal year basis. (Each year ends in June. For example, the 2021 forecast is for the 12 months ending in June 2021.)
-
-The Moody's Dec 2020 baseline forecast is far more optimistic than the CBO July baseline, reflecting the positive economic news received since July. It is more plausible than the CBO baseline. The Moody's July baseline also was more optimistic than CBO July, but not nearly as much.
-
-
-```{r natfc, include=TRUE, fig.width=10, fig.height=6}
-
-fcorder <- c("cbo_precovid", "cbo_jul2020", "moodys_jul2020p50", "moodys_jul2020p90",
-             "moodys_dec2020", "fedalt")
-
-usgdp %>%
-  filter(year >= 2015) %>%
-  select(-gdphist) %>%
-  pivot_longer(-year, names_to = "forecast") %>%
-  mutate(forecast=factor(forecast, level=fcorder)) %>%
-  arrange(forecast) %>%
-  ggplot(aes(year, value / 1e3, colour=forecast)) +
-  geom_line(size=1) +
-  geom_point() +
-  scale_y_continuous(name="$ billions", breaks=seq(10e3, 50e3, 2.5e3), labels=scales::comma) +
-  scale_x_continuous(name="State fiscal year", breaks=seq(2010, 2040, 2)) +
-  ggtitle("National forecasts of nominal GDP, state fiscal year basis") +
-  theme_bw()
+fcorder <- c("moodys_jul2020p90", "fedalt")
+plot_fc(fcorder, "Downside Covid") +
+  scale_colour_manual(values=c("blue", "darkgreen"))
 
 ```
 
@@ -223,18 +264,16 @@ usgdp %>%
 
 Capital gains are important to state income taxes, as will be apparent when we look at individual states.
 
-We have a small model that estimates capital gains based upon GDP, the stock market (S&P 500), and their own history.
+We have a small model that estimates and forecasts national capital gains based upon national GDP, the stock market (S&P 500 total returns), and capital gains' own history. (A regression with ARIMA errors model.)
 
 Here are fit statistics from the model:
-
-`r fabletools::report(cgmodel)`
 
 
 ```{r include=TRUE}
 report(cgmodel)
 ```
 
-Here is a plot of how well/poorly the model does over history.
+Here is a plot of how well/poorly the model does over history. It captures broad trends but is not very accurate, as is generally true of capital gains models: capital gains are highly volatile and difficult to predict.
 
 ```{r cgfit, include=TRUE, fig.width=10, fig.height=6}
 
@@ -281,10 +320,57 @@ cgfcast %>%
 ```
 
 
+## Revenue forecasting scenarios
+
+A revenue forecasting scenario is a combination of three sets of assumptions:
+
+1.    **National economic forecast:**  Drives the state economic forecast. Currently we have two main forecasts:
+      +   Pre-Covid forecast -- currently the CBO pre-Covid forecast provided by Pew
+      +   Covid baseline economic forecast -- currently the Moody's December 2020 forecast provided by Pew; this can be updated to the CBO February 2021 forecast when available
+    +   Covid downside forecast -- currently the fedalt forecast provided by Pew
+
+
+2.    **Equity returns (domestic equity) forecast:**  Together with national GDP this drives the national capital gains forecast:
+      +   Baseline scenario provided by Pew
+      +   Downside scenario provided by Pew (based on fedalt scenario)
+
+
+3.    **Near-term state revenue results (fiscal 2021):**
+      +   Varies by state but generally will be the most-recent credible governmental forecast.
+      +   It is possible to have multiple options for each state but currently I use only one.
+      +   Where available, I also have a pre-Covid estimate for 2021. 
+      +   I always use estimated actuals for 2020, which means we never have a "pure" pre-Covid baseline because 2020 estimated actuals reflect substantial Covid-related impacts for some revenue sources.
+      
+<br>
+I combine these three sets of assumptions to construct up to three scenarios for each state:
+
+1.    **Pre-covid - combines:**
+      +   CBO pre-covid economic forecast
+      +   Pew Covid baseline equity returns forecast
+      +   A pre-covid 2021 revenue estimate if available
+
+2.    **Covid baseline - combines:**
+      +   Moody's December 2020 economic forecast
+      +   Pew Covid baseline equity returns forecast
+      +   Recent state government revenue estimate for 2021, reflecting Covid effects
+
+3.    **Covid downside - combines:**
+      +   Fed alternative economic forecast
+      +   Pew Covid downside equity returns forecast
+      +   Recent state government revenue estimate for 2021, reflecting Covid effects
+      
+
+## Revenue forecast methods
+Finally, I have two revenue forecast methods for each state.      
+      
+
+
 # State Own-Source Revenue analysis and forecasts
 
 ```{r state_data_prep}
-# prep data for all states, then draw as needed for individual states
+# prep data for ALL states, then draw as needed for individual states
+
+# state and US gdp, history and forecast, all economic forecasts, 1948-2030
 stusgdp <- bind_rows(usgdp %>% mutate(stabbr="US"),
                      stgdp) %>%
   pivot_longer(-c(year, stabbr), names_to = "forecast") %>%
@@ -292,6 +378,7 @@ stusgdp <- bind_rows(usgdp %>% mutate(stabbr="US"),
   mutate(pch=value / value[match(year - 1, year)] * 100 -100) %>%
   ungroup
 
+# same, but wide (no rows for US), 1965-2030
 stgdp_uswide <- stusgdp %>%
   group_by(forecast, year) %>%
   mutate(usgdp=value[stabbr=="US"],
@@ -300,13 +387,16 @@ stgdp_uswide <- stusgdp %>%
   filter(stabbr != "US", year >= 1965) %>%
   rename(stgdp=value, stgdp_pch=pch)
 
+# cg history and forecast, economic and equity forecast combinations, 1995-2030
 capgains <- cgfcast %>%
   select(year, gdpname, eqname, capgains=cgfcast) %>%
   group_by(gdpname, eqname) %>%
   mutate(capgains_lag=capgains[match(year - 1, year)],
          capgains_pch=capgains / capgains_lag * 100 - 100) %>%
   ungroup
+count(capgains, gdpname, eqname)
 
+# state gdp and osr pch, 1965-2020
 gdposr_pch <- stgdp %>%
   select(stabbr, year, gdp=moodys_dec2020) %>%
   inner_join(osr %>% 
@@ -319,7 +409,8 @@ gdposr_pch <- stgdp %>%
   ungroup %>%
   filter(year > min(year))
 
-# State GDP, capital gains, and income tax
+# State GDP, capital gains, and income tax, 1995-2020, based on moodys_dec2020
+# on expectation that it will give the best estimate of FY 2020 gdp
 iit_gdpcg <- stgdp %>%
   select(year, stabbr, gdp=moodys_dec2020) %>%
   inner_join(osr %>% 
@@ -340,9 +431,6 @@ iit_gdpcg <- stgdp %>%
 
 
 ```{r define_scenarios}
-# prepare forecast data
-# first construct the short-term state forecasts for nontax revenue -- set equal to state gdp growth
-
 # define scenarios as combinations of:
 
 #   states & state govt forecasts
@@ -376,19 +464,26 @@ scenarios <- tribble(
   # "MA", "boyd_baseline"  # baseline
 )
 
+# define states we are looking at, based on the scenarios
+sts <- unique(scenarios$stabbr)
+
 
 ```
 
 
 ```{r}
 # construct dataframe that will hold forecasts
-osrvars <- c("iit", "gst", "cit", "othertax", "nontax")
+osrvars <- c("iit", "gst", "cit", "othertax", "nontax") # just the elements, not totals
 
-# create a base data frame to hold forecasts
+# create a base data frame to hold forecasts - joins will grab only the states of interest
 base <- scenarios %>%
   inner_join(stgdp_uswide %>% 
                rename(econfc=forecast),
              by = c("stabbr", "econfc")) %>%
+  # create an indexed value we can use to get stgdp growth from any year to another year
+  group_by(scenario, econfc, equityfc, govtfc) %>%
+  mutate(istgdp=stgdp / stgdp[year==1965]) %>%
+  ungroup %>%
   left_join(capgains %>% 
               rename(econfc=gdpname, equityfc=eqname),
             by = c("econfc", "equityfc", "year")) %>%
@@ -399,7 +494,7 @@ base <- scenarios %>%
             by = c("stabbr", "year", "revtype")) %>%
   select(stabbr, scenario, year, 
          stgdp, stgdp_pch, 
-         usgdp, usgdp_pch, 
+         usgdp, usgdp_pch, istgdp,
          capgains, capgains_lag, capgains_pch,
          revtype, rev, rev_pch,
          econfc, equityfc, govtfc)
@@ -432,8 +527,9 @@ assume2021_long <-
 ```
 
 
+
 ```{r fc_2021}
-# fill in 2021 values using assume2021
+# fill in 2021 values using assume2021 growth rates
 
 fcast <- base %>%
   left_join(assume2021_long %>%
@@ -453,102 +549,133 @@ fcast <- base %>%
 ```
 
 
-```{r fc_interim}
+```{r fc_fitsave_recovery_model}
 # estimate through 2021 then fc 2022-2024
 
 # create the right tsibble
 fcast_ts <- fcast %>%
   select(-rev_pch) %>%
   filter(year >= 1996) %>% # we don't have capgains_lag before here
-  mutate(stgdp_b=stgdp / 1e3) %>%
+  mutate(stgdp_b=stgdp / 1e3) %>%  # put stgdp in billions to reduce numerical issues
   as_tsibble(index=year, key = c(stabbr, econfc, equityfc, govtfc, revtype))
 
+# estimate two simple regression with ARIMA errors models
+#   gdp and capital gains, which we will use only for the income tax
+#   gdp only, which we will use for other tax sources
+a <- proc.time()
 revmods <- fcast_ts %>%
   filter(year <= 2021) %>%
   model(modcg = ARIMA(rev ~ stgdp_b + capgains_lag),
         modbase = ARIMA(rev ~ stgdp_b))
+b <- proc.time()
+b - a  # takes about 7 seconds to estimate, so save
 saveRDS(revmods, here::here("data", "revmods.rds"))
-
-
-revmods <- readRDS(here::here("data", "revmods.rds"))
-# forecast
-interim <- revmods %>%
-  forecast(new_data=fcast_ts %>% filter(year %in% 2022:2024))
-
-interim_keep <- interim %>%
-  mutate(iitmod = (revtype=="iit") & (.model=="modcg"),
-         othermod=(revtype != "iit") & (.model=="modbase")) %>%
-  filter(iitmod | othermod) %>%
-  as_tibble
-
-# add the forecasts in to the base file
-fcast2 <- fcast %>%
-  left_join(interim_keep %>%
-              select(stabbr, year, econfc, equityfc, govtfc, revtype, revfc=.mean),
-            by = c("stabbr", "year", "econfc", "equityfc", "govtfc", "revtype")) %>%
-  mutate(rev=ifelse(year >= 2022, revfc, rev)) %>%
-  # override the model forecast for nontax revenue
-  group_by(stabbr, econfc, equityfc, govtfc, revtype) %>%
-  mutate(rev=ifelse(year %in% 2022:2024 & revtype=="nontax",
-                    stgdp / stgdp[year==2021] * rev[year==2021],
-                    rev)) %>%
-  ungroup
-           
-
-rt <- "iit"
-rt <- "gst"
-rt <- "cit"
-rt <- "othertax"
-rt <- "nontax"
-fcast2 %>%
-  filter(stabbr=="NJ", revtype==rt) %>%
-  filter(year %in% 2015:2025) %>%
-  ggplot(aes(year, rev, colour=scenario)) +
-  geom_line() +
-  geom_point() +
-  ggtitle(rt)
-
-
-scen <- "baseline"
-fcast2 %>%
-  filter(stabbr=="NJ", scenario=="baseline") %>%
-  filter(year %in% 2015:2025) %>%
-  ggplot(aes(year, rev * 1000 / stgdp * 100, colour=revtype)) +
-  geom_line() +
-  geom_point() +
-  scale_x_continuous(breaks=seq(2010, 2030, 2)) +
-  ggtitle(scen)
-
-fcast2 %>%
-  filter(stabbr=="NJ", scenario=="baseline") %>%
-  filter(year %in% 2015:2025) %>%
-  group_by(year) %>%
-  summarise(osr=sum(rev), stgdp=mean(stgdp)) %>%
-  ungroup %>%
-  ggplot(aes(year, osr * 1000 / stgdp * 100)) +
-  geom_line() +
-  geom_point() +
-  scale_x_continuous(breaks=seq(2010, 2030, 2)) +
-  ggtitle(scen)
 
 ```
 
 
+```{r define_recovery_years}
+recovery_years <- 2022:2024
+
+trough_year <- min(recovery_years) - 1
+recovered_year <- max(recovery_years) + 1
+
+```
+
+
+
+```{r fc_forecast_recovery_models}
+# forecast taxes in the recovery period using models
+# create fcast_mod with recovery years only
+
+revmods <- readRDS(here::here("data", "revmods.rds"))
+# forecast
+recovery_modfc <- revmods %>%
+  forecast(new_data=fcast_ts %>% filter(year %in% recovery_years))
+
+fcast_mod <- recovery_modfc %>%
+  as_tibble() %>%
+  mutate(iitmod = (revtype=="iit") & (.model=="modcg"),
+         othermod=(revtype != "iit") & (.model=="modbase")) %>%
+  filter(iitmod | othermod) %>%
+  select(stabbr, year, scenario, econfc, equityfc, govtfc, revtype, fcmod=.mean)
+summary(fcast_mod)  # only includes the recovery years
+
+fcast_mod %>% 
+  filter(stabbr=="NJ", year %in% 2019:2025, scenario %in% c("baseline", "downside"))
+
+
+
+```
+
+
+
+```{r fc_forecast_recovery_gapclose}
+# forecast using the gap-closing method
+# create fcast_gap with recovery years only
+targets
+fcast_gap <- fcast %>%
+  group_by(stabbr, scenario, revtype) %>%
+  mutate(revgdp=rev / stgdp * 100,
+         troughpct=revgdp[year==trough_year]) %>%
+  filter(year %in% recovery_years) %>%
+  left_join(targets %>% 
+              filter(ma_years==1, year==2019) %>%
+              select(stabbr, revtype=name, longrun_targetpct),
+            by=c("stabbr", "revtype")) %>%
+  mutate(troughgap=troughpct - longrun_targetpct,
+         year_targetpct=troughpct - troughgap * (year - trough_year) / length(recovery_years),
+         fcgap=stgdp * year_targetpct / 100) %>%
+  ungroup
+summary(fcast_gap)
+glimpse(fcast_gap)
+
+fcast_gap %>%
+  filter(stabbr=="NJ") %>%
+  select(stabbr, scenario, year, revtype, stgdp, rev, revgdp, 
+         troughpct, longrun_targetpct, troughgap, year_targetpct, fcgap) %>%
+  arrange(stabbr, scenario, revtype, year)
+  
+
+
+```
+
+
+
+
 ```{r fc_longterm}
 fcast2
-fcast3 <- fcast2 %>%
+summary(fcast_mod)
+summary(fcast_gap)
+
+mainvars <- c("stabbr", "year", "econfc", "equityfc", "govtfc", "revtype")
+
+fcast2 <- fcast %>%
+  left_join(fcast_mod %>% select(all_of(c(mainvars, "fcmod"))),
+            by = c("stabbr", "year", "revtype", "econfc", "equityfc", "govtfc")) %>%
+  left_join(fcast_gap %>% select(all_of(c(mainvars, "fcgap"))),
+            by = c("stabbr", "year", "revtype", "econfc", "equityfc", "govtfc")) %>%
+  # fill in history
+  mutate(across(c(fcmod, fcgap), ~ ifelse(year <= 2021, rev, .))) %>%
+  # 2022+ use pch for nontax, all years
   group_by(stabbr, econfc, equityfc, govtfc, revtype) %>%
-  arrange(year) %>%
-  mutate(irev=ifelse(year <= 2024, 1, 1 + stgdp_pch / 100),
-         cprod=cumprod(irev),
-         rev=ifelse(year > 2024,
-                    rev[year==2024] * cprod,
-                    rev)) %>%
+  mutate(across(c(fcmod, fcgap), ~ ifelse(year > 2021 & revtype=="nontax",
+                                          rev[year==2021] * istgdp / istgdp[year==2021],
+                                          .)),
+         across(c(fcmod, fcgap), ~ ifelse(year > max(recovery_years) & revtype!="nontax",
+                                          .[year==max(recovery_years)] 
+                                          * istgdp / istgdp[year==max(recovery_years)],
+                                          .))
+         ) %>%
   ungroup
 
-fcast3 %>%
-  filter(stabbr=="MA", revtype=="iit", year>=2020) %>%
-  select(stabbr, year, econfc, equityfc, govtfc, revtype, stgdp_pch, irev, cprod)
+# fcast2 %>% filter(stabbr=="NJ", year %in% 2020:2025) %>% select(year, rev, fcmod, fcgap)
+fcast2 %>% 
+  filter(stabbr=="NJ", year %in% 2020:2026, scenario=="baseline", revtype=="iit") %>% 
+  select(year, revtype, stgdp_pch, istgdp, rev, fcmod, fcgap)
+  
+# now make a wide file and calculate totals  
+
 
 rt <- "iit"
 rt <- "gst"
