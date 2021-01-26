@@ -8,11 +8,21 @@ output:
     fig_height: 6
     fig_width: 8
     toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
   html_document:
-    toc: yes
     df_print: paged
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: true
+      smooth_scroll: false      
 editor_options:
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 
@@ -22,16 +32,69 @@ options(width = 150)
 ```
 
 
-```{r globals}
-
-
-```
-
-
 ```{r libraries, include=FALSE}
 source(here::here("include", "libraries.r"))
 devtools::session_info()
 ```
+
+
+```{r globals}
+
+  # html_document:
+  #   toc: yes
+  #   toc_depth: 5
+  #   toc_float:
+  #     collapsed: false
+  #     smooth_scroll: false
+  #   df_print: paged
+```
+
+
+```{r define_scenarios}
+# define scenarios as combinations of:
+
+#   states & state govt forecasts
+
+#   national forecasts
+    # cbo_precovid
+    # cbo_jul2020
+    # fedalt
+    # moodys_jul2020p50
+    # moodys_jul2020p90
+    # moodys_dec2020
+
+#   equity forecasts
+#     pew_covidbase
+#     pew_fedalt
+
+scenarios <- tribble(
+  ~stabbr, ~govtfc, ~econfc, ~equityfc, ~scenario,
+  
+  "NJ", "ols_sep2020", "moodys_dec2020", "pew_covidbase",  "baseline",
+  "NJ", "gov_aug2020", "fedalt", "pew_fedalt", "downside",
+  "NJ", "gov_bmxleg", "cbo_precovid", "pew_covidbase", "precovid",
+  
+  "MA", "gov_oct2020", "moodys_dec2020", "pew_covidbase",  "baseline",
+  "MA", "gov_oct2020", "fedalt", "pew_fedalt",  "downside",
+  "MA", "consensus_jan2020", "cbo_precovid", "pew_covidbase",  "precovid",
+)
+# gov_oct2020
+
+# define states we are looking at, based on the scenarios
+# sts <- unique(scenarios$stabbr)
+
+
+```
+
+```{r define_forecast_parameters}
+
+trough_year <- 2021
+
+mod_recovery_years <- 2022:2025   # period for model forecasts
+gap_recovery_years <- 2022:2026  # period for gap-closing forecasts, may not be same as mod_recovery_years
+
+```
+
 
 <!--
 Note:
@@ -39,94 +102,7 @@ Note:
 -->
 
 
-# Goals and methods: Constructing state OSR forecasts
-
-## Goals
-
-Goal is to forecast state own-source revenue (osr) and components using a method that:
-
-*   is compatible with a state's own short-term forecasts,
-*   stabilizes in the longer term to grow at the rate of state gdp, and
-*   can be applied to individual states with a minimal amount of digging for new information
-
-
-Key forecast elements:
-
-*   State own-source revenue and major components
-    +   using Census definitions
-    +   state fiscal years (periods ending in June)
-    +   nominal
-    +   $ millions
-    +   2021 through 2030
-    
-*   National economic forecast - uses one of the relatively current forecasts provided by Pew:
-    +   CBO July 2020 (baseline)
-    +   Moody's December 2020, p50 (baseline) - the most-current full forecast we have
-    +   Moody's July 2020, p50
-    +   Moody's July 2020, p90 (S3 - severe stress scenario)
-    +   (We also have available a Moody's December 2019 baseline forecast, not used)
-    +   Federal Reserve alternative severe forecast
-    
-*   State economic forecast:
-
-    +   available state GDP forecasts are Moody's baseline forecasts released in December 2019, July 2020, and December 2020, each of which also has an associated Moody's national forecast
-    +   to get state GDP forecasts under different national scenarios, I assume the difference between a state's growth rate and the national growth rate is the same as it is in the most-recent Moody's forecast (December 2020)
-
-*   Equity return forecasts - factor into capital gains forecasts, which in turn affect the income tax. There are two equity return forecasts (domestic equities)
-    +   pew_baseline -- the Pew Covid baseline -- **Note that this is not consistent with the CBO July 2020 economic forecast**
-    +   pew_fedalt
-    
-*   Capital gains forecasts
-
-    +   From a simple model based upon national GDP, S&P 500, and capital gains history
-    +   Forecast varies depending on which national GDP forecast is used and which equity forecast is used
-  
-
-Overall approach for OSR and components:
-
-*   2019 and earlier - Census
-*   2020 - tax growth rates from Census quarterly data; nontax based on state GDP estimate
-*   2021 uses growth rates from a state governmental forecast, or inferred from those forecasts; nontax revenue assumed to grow at rate of state GDP
-*   2022-2024 taxes are from simple models:
-    +   income tax based upon state GDP, national capital gains, and its own history
-    +   other tax categories based upon state GDP and the tax's own history
-    +   nontax revenue assumed to grow at the rate of GDP
-*   2025-2030 - all osr components are a constant % of GDP - their presumed long-term average (thus, all osr components grow at the same rate as state GDP)
-
-Scenarios: Three factors determine a scenario
-
-*   Which national economic forecast is used
-*   Which equity forecast is used
-*   Which governmental short-term forecast is used
-
-Some combinations of these will not make sense (e.g., fedalt equity forecast might not make sense to combine with the CBO pre-covid economic forecast).
-
-Currently I am using the Moody's December 2020 economic forecast as the best economic forecast. I know you prefer CBO July. We should discuss.
-
-Here are the scenarios I am using (as of now):
-
-
-  stabbr govtfc      econfc         equityfc      scenario
-
-  NJ     ols_sep2020 moodys_dec2020 pew_covidbase baseline
-  NJ     gov_aug2020 fedalt         pew_fedalt    downside
-  NJ     gov_bmxleg  cbo_precovid   pew_covidbase precovid
-  
-  MA     bhi_oct2020 moodys_dec2020 pew_covidbase baseline
-
-
-Selected issues and considerations:
-
-*   Uses Census definitions of OSR and thus is different from what policymakers in NJ are familiar with
-*   Assumes all revenue sources move from their 2021 values to longer term values, as % of GDP; historically, other tax revenue has tended to decline as % of GDP until policymakers explicitly raise it
-*   Because the 2021 OSR estimate is based on a fixed governmental forecast, and is independent of the economic forecast, it may seem odd in relation to a severe-downturn economic forecast for FY 2021 - in particular, OSR as a percent of GDP is unusually high in 2021 when using the Moody's p90 forecast (because gdp is so low in that forecast)
-
-## Data sources [details to come]
-
-*   US GDP history: BEA NIPA tables, quarterly converted to state fiscal year (July-June)
-*   State GDP history: BEA data, spliced NAICS and SIC; quarterly converted to state fiscal year, adjusted
-*   US GDP forecasts:
-    +   CBO pre-covid
+**See explanations AFTER the graphs and tables below, in the *Goals and methods section*.**
 
 
 # Preliminaries
@@ -183,7 +159,6 @@ assume <- read_excel(here::here("data", fn), sheet="osr_forecasts") %>%
   # convert to percentage
   mutate(across(c(iit, cit, gst, othertax, nontax), ~ . * 100))
 assume
-
 
 ```
 
@@ -360,7 +335,7 @@ I combine these three sets of assumptions to construct up to three scenarios for
       +   Recent state government revenue estimate for 2021, reflecting Covid effects
       
 
-## Revenue forecast methods
+## Revenue forecasting methods
 Finally, I have two revenue forecast methods for each state.      
       
 
@@ -430,45 +405,6 @@ iit_gdpcg <- stgdp %>%
 ```
 
 
-```{r define_scenarios}
-# define scenarios as combinations of:
-
-#   states & state govt forecasts
-    # MA     bhi_oct2020       
-    # MA     boyd_baseline
-
-    # NJ     gov_aug2020      
-    # NJ     gov_bmxleg       
-    # NJ     ols_sep2020
-
-#   national forecasts
-    # cbo_precovid
-    # cbo_jul2020
-    # fedalt
-    # moodys_jul2020p50
-    # moodys_jul2020p90
-    # moodys_dec2020
-
-#   equity forecasts
-#     pew_covidbase
-#     pew_fedalt
-
-scenarios <- tribble(
-  ~stabbr, ~govtfc, ~econfc, ~equityfc, ~scenario,
-  
-  "NJ", "ols_sep2020", "moodys_dec2020", "pew_covidbase",  "baseline",
-  "NJ", "gov_aug2020", "fedalt", "pew_fedalt", "downside",
-  "NJ", "gov_bmxleg", "cbo_precovid", "pew_covidbase", "precovid",
-  
-  "MA", "bhi_oct2020", "moodys_dec2020", "pew_covidbase",  "baseline",
-  # "MA", "boyd_baseline"  # baseline
-)
-
-# define states we are looking at, based on the scenarios
-sts <- unique(scenarios$stabbr)
-
-
-```
 
 
 ```{r}
@@ -517,7 +453,7 @@ assume2021 <- assume %>%
               select(stabbr, year, econfc=forecast, gdppch=pch), 
             by = c("stabbr", "year", "econfc")) %>%
   mutate(nontax=ifelse(is.na(nontax), gdppch, nontax)) %>%
-  select(-gdppch, -type)
+  select(-gdppch)
 assume2021
 
 assume2021_long <-
@@ -549,16 +485,18 @@ fcast <- base %>%
 ```
 
 
-```{r fc_fitsave_recovery_model}
-# estimate through 2021 then fc 2022-2024
-
-# create the right tsibble
+```{r}
+# create a tsibble for model-based forecasts
 fcast_ts <- fcast %>%
   select(-rev_pch) %>%
   filter(year >= 1996) %>% # we don't have capgains_lag before here
   mutate(stgdp_b=stgdp / 1e3) %>%  # put stgdp in billions to reduce numerical issues
   as_tsibble(index=year, key = c(stabbr, econfc, equityfc, govtfc, revtype))
 
+```
+
+
+```{r fc_fitsave_recovery_model}
 # estimate two simple regression with ARIMA errors models
 #   gdp and capital gains, which we will use only for the income tax
 #   gdp only, which we will use for other tax sources
@@ -574,16 +512,6 @@ saveRDS(revmods, here::here("data", "revmods.rds"))
 ```
 
 
-```{r define_recovery_years}
-recovery_years <- 2022:2024
-
-trough_year <- min(recovery_years) - 1
-recovered_year <- max(recovery_years) + 1
-
-```
-
-
-
 ```{r fc_forecast_recovery_models}
 # forecast taxes in the recovery period using models
 # create fcast_mod with recovery years only
@@ -591,7 +519,7 @@ recovered_year <- max(recovery_years) + 1
 revmods <- readRDS(here::here("data", "revmods.rds"))
 # forecast
 recovery_modfc <- revmods %>%
-  forecast(new_data=fcast_ts %>% filter(year %in% recovery_years))
+  forecast(new_data=fcast_ts %>% filter(year %in% mod_recovery_years))
 
 fcast_mod <- recovery_modfc %>%
   as_tibble() %>%
@@ -605,7 +533,6 @@ fcast_mod %>%
   filter(stabbr=="NJ", year %in% 2019:2025, scenario %in% c("baseline", "downside"))
 
 
-
 ```
 
 
@@ -614,26 +541,33 @@ fcast_mod %>%
 # forecast using the gap-closing method
 # create fcast_gap with recovery years only
 targets
+
 fcast_gap <- fcast %>%
   group_by(stabbr, scenario, revtype) %>%
   mutate(revgdp=rev / stgdp * 100,
          troughpct=revgdp[year==trough_year]) %>%
-  filter(year %in% recovery_years) %>%
+  filter(year %in% gap_recovery_years) %>%
   left_join(targets %>% 
               filter(ma_years==1, year==2019) %>%
               select(stabbr, revtype=name, longrun_targetpct),
             by=c("stabbr", "revtype")) %>%
   mutate(troughgap=troughpct - longrun_targetpct,
-         year_targetpct=troughpct - troughgap * (year - trough_year) / length(recovery_years),
+         year_targetpct=troughpct - troughgap * (year - trough_year) / length(gap_recovery_years),
          fcgap=stgdp * year_targetpct / 100) %>%
   ungroup
 summary(fcast_gap)
 glimpse(fcast_gap)
 
 fcast_gap %>%
-  filter(stabbr=="NJ") %>%
+  filter(stabbr=="NJ", year <=2026) %>%
   select(stabbr, scenario, year, revtype, stgdp, rev, revgdp, 
          troughpct, longrun_targetpct, troughgap, year_targetpct, fcgap) %>%
+  arrange(stabbr, scenario, revtype, year)
+
+fcast_gap %>%
+  filter(stabbr=="NJ", year <=2026) %>%
+  select(stabbr, scenario, year, revtype, stgdp, troughpct, longrun_targetpct,
+         troughgap, year_targetpct, fcgap) %>%
   arrange(stabbr, scenario, revtype, year)
   
 
@@ -641,10 +575,7 @@ fcast_gap %>%
 ```
 
 
-
-
 ```{r fc_longterm}
-fcast2
 summary(fcast_mod)
 summary(fcast_gap)
 
@@ -659,14 +590,17 @@ fcast2 <- fcast %>%
   mutate(across(c(fcmod, fcgap), ~ ifelse(year <= 2021, rev, .))) %>%
   # 2022+ use pch for nontax, all years
   group_by(stabbr, econfc, equityfc, govtfc, revtype) %>%
+  # forecast nontax, all years, by assuming it grows as state gdp grows
   mutate(across(c(fcmod, fcgap), ~ ifelse(year > 2021 & revtype=="nontax",
                                           rev[year==2021] * istgdp / istgdp[year==2021],
                                           .)),
-         across(c(fcmod, fcgap), ~ ifelse(year > max(recovery_years) & revtype!="nontax",
-                                          .[year==max(recovery_years)] 
-                                          * istgdp / istgdp[year==max(recovery_years)],
-                                          .))
-         ) %>%
+         # use separate periods for fcmod and fcgap
+         fcmod = ifelse(year > max(mod_recovery_years) & revtype!="nontax",
+                        fcmod[year==max(mod_recovery_years)] * istgdp / istgdp[year==max(mod_recovery_years)],
+                        fcmod),
+         fcgap = ifelse(year > max(gap_recovery_years) & revtype!="nontax",
+                        fcgap[year==max(gap_recovery_years)] * istgdp / istgdp[year==max(gap_recovery_years)],
+                        fcgap)) %>%
   ungroup
 
 # fcast2 %>% filter(stabbr=="NJ", year %in% 2020:2025) %>% select(year, rev, fcmod, fcgap)
@@ -674,59 +608,65 @@ fcast2 %>%
   filter(stabbr=="NJ", year %in% 2020:2026, scenario=="baseline", revtype=="iit") %>% 
   select(year, revtype, stgdp_pch, istgdp, rev, fcmod, fcgap)
   
-# now make a wide file and calculate totals  
+# long
+names(fcast2)
+fcast_long <- fcast2 %>%
+  select(stabbr, year, scenario, 
+         econfc, equityfc, govtfc,
+         usgdp, usgdp_pch,
+         stgdp, stgdp_pch,
+         capgains, capgains_lag,
+         capgains_pch,
+         revtype, model=fcmod, gapclose=fcgap) %>%
+  pivot_longer(c(model, gapclose), names_to = "method", values_to = "rev")
 
-
-rt <- "iit"
-rt <- "gst"
-rt <- "cit"
-rt <- "othertax"
-rt <- "nontax"
-fcast3 %>%
-  filter(stabbr=="NJ", revtype==rt) %>%
-  filter(year >= 2015) %>%
-  ggplot(aes(year, rev, colour=scenario)) +
-  geom_line() +
-  geom_point() +
-  ggtitle(rt)
 
 ```
 
 
 ```{r fc_wide}
-fcast_wide <- fcast3 %>%
-  select(-c(rev_pch, revfc, irev, cprod)) %>%
+fcast_wide <- fcast_long %>%
   pivot_wider(names_from = revtype, values_from = rev) %>%
   mutate(tottax=naz(iit) + naz(gst) + naz(cit) + naz(othertax),
          osr=tottax + naz(nontax))
   
-fcast_wide %>%
-  filter(stabbr=="NJ") %>%
-  filter(year >= 2015) %>%
-  ggplot(aes(year, osr, colour=scenario)) +
-  geom_line() +
-  geom_point() +
-  ggtitle("osr")
-
-fcast_wide %>%
-  filter(stabbr=="NJ") %>%
-  filter(year >= 2010) %>%
-  mutate(pct=osr * 1000 / stgdp * 100) %>%
-  ggplot(aes(year, pct, colour=scenario)) +
-  geom_line() +
-  geom_point() +
-  ggtitle("pct")
-
-fcast_wide %>%
-  pivot_longer(cols=c(iit, gst, cit, othertax, tottax, nontax, osr),
-               names_to = "revtype",
-               values_to = "rev") %>%
-  mutate(pctgdp=rev * 1000 / stgdp * 100) %>%
-  filter(stabbr=="NJ", year >= 2015, scenario=="baseline") %>%
-  ggplot(aes(year, pctgdp, colour=revtype)) +
-  geom_line() +
-  geom_point() +
-  ggtitle("pctgdp")
+# fcast_wide %>%
+#   filter(stabbr=="NJ", method=="model") %>%
+#   filter(year >= 2015) %>%
+#   ggplot(aes(year, osr, colour=scenario)) +
+#   geom_line() +
+#   geom_point() +
+#   ggtitle("osr")
+# 
+# fcast_wide %>%
+#   filter(stabbr=="NJ", method=="model") %>%
+#   filter(year >= 2010) %>%
+#   mutate(pct=osr / stgdp * 100) %>%
+#   ggplot(aes(year, pct, colour=scenario)) +
+#   geom_line() +
+#   geom_point() +
+#   ggtitle("pct")
+# 
+# fcast_wide %>%
+#   filter(stabbr=="NJ", scenario=="precovid") %>%
+#   filter(year >= 2010) %>%
+#   mutate(pct=osr / stgdp * 100) %>%
+#   ggplot(aes(year, pct, colour=method)) +
+#   geom_line() +
+#   geom_point() +
+#   ggtitle("pct")
+# 
+# 
+# fcast_wide %>%
+#   pivot_longer(cols=c(iit, gst, cit, othertax, tottax, nontax, osr),
+#                names_to = "revtype",
+#                values_to = "rev") %>%
+#   mutate(pctgdp=rev * 1000 / stgdp * 100) %>%
+#   filter(stabbr=="NJ", year >= 2015, scenario=="baseline") %>%
+#   ggplot(aes(year, pctgdp, colour=revtype)) +
+#   geom_line() +
+#   geom_point() +
+#   ggtitle("pctgdp")
 
 ```
 
@@ -749,21 +689,31 @@ gdp_diff <- function(st){
 
 gdp_comp_plot <- function(st){
   # compare national and state gdp growth for a state
+  startyear <- 1990
+  
   df <- gdp_diff(st)
+  
+  recuse <- recessions %>%
+    filter(rec_year >= startyear)
   
   df %>%
     select(-diff) %>%
-    filter(year >= 2000, year <= 2030) %>%
+    filter(year >= startyear, year <= 2030) %>%
     pivot_longer(-year, names_to = "stabbr") %>%
     ggplot(aes(year, value, colour=stabbr)) +
       geom_line(size=1) +
       geom_point() +
       scale_colour_manual(values=c("blue", "darkgreen")) +
       geom_hline(yintercept = 0) +
-      geom_vline(xintercept = 2020.5, linetype="dotted") +
+      geom_vline(xintercept = 2020.5, linetype="dotted", size=1) +
       # geom_hline(aes(yintercept=avg$avg), colour="red", size=0.4) +
       scale_y_continuous(name="% change", breaks=seq(-20, 20, 1)) +
       scale_x_continuous(name="State fiscal year", breaks=seq(1980, 2050, 5)) +
+      annotate("rect",
+         fill = "lightgrey",
+         alpha = 0.5, # larger alpha is darker rectangle
+         xmin = recuse$peak_decimal, xmax = recuse$trough_decimal,
+         ymin = -Inf, ymax = Inf) +
       ggtitle(paste0("Nominal GDP growth for ", st, " and the nation, Moody's December 2020 forecast"),
               subtitle=paste0("Dotted vertical line marks break between history and forecast")) +
       theme_bw()
@@ -774,6 +724,10 @@ gdp_diff_plot <- function(st){
   # compare national and state gdp growth for a state
   df <- gdp_diff(st)
   
+  startyear <- 1990
+  recuse <- recessions %>%
+    filter(rec_year >= startyear)
+  
   avgstart <- 2000
   avgend <- 2020
   avg <- df %>%
@@ -781,15 +735,20 @@ gdp_diff_plot <- function(st){
     summarise(avg=mean(diff))
   
   df %>%
-    filter(year >= 2000, year <= 2030) %>%
+    filter(year >= startyear, year <= 2030) %>%
     ggplot(aes(year, diff)) +
       geom_line(colour="blue", size=1) +
       geom_point(colour="blue") +
       geom_hline(yintercept = 0) +
-      geom_vline(xintercept = 2020.5, linetype="dotted") +
+      geom_vline(xintercept = 2020.5, linetype="dotted", size=1) +
       geom_hline(aes(yintercept=avg$avg), colour="red", size=0.4) +
       scale_y_continuous(name="State % change minus US % change", breaks=seq(-10, 10, 1)) +
       scale_x_continuous(name="State fiscal year", breaks=seq(1980, 2050, 5)) +
+      annotate("rect",
+         fill = "lightgrey",
+         alpha = 0.5, # larger alpha is darker rectangle
+         xmin = recuse$peak_decimal, xmax = recuse$trough_decimal,
+         ymin = -Inf, ymax = Inf) +    
       ggtitle(paste0("Nominal GDP growth: ", st, " minus nation, Moody's December 2020 forecast"),
               subtitle=paste0("Red horizontal line is average over ", avgstart, "-", avgend,
                               ". Dotted vertical line marks break between history and forecast.")) +
@@ -868,41 +827,83 @@ iit_gdpcg_plot <- function(st){
 #   geom_point() +
 #   ggtitle("pctgdp")
 
-osr_scen <- function(st){
+osr_scen <- function(st, method){
   p <- fcast_wide %>%
-    filter(stabbr==st, year >= 2015) %>%
+    filter(stabbr==st, year >= 2015, method==!!method) %>%
   ggplot(aes(year, osr, colour=scenario)) +
   geom_line() +
   geom_point() +
-  ggtitle("Scenarios") +
+  scale_x_continuous(name="State fiscal year", breaks=seq(2000, 2040, 2)) +
+  scale_y_continuous(name="Own-source revenue, $ millions", labels = scales::comma) +
+  ggtitle(paste0("Scenarios using method: ", method)) +
   theme_bw()
   
   p
 }
 
+osr_method <- function(st, scenario, var){
+  # if(st != "NJ" & scenario != "baseline"){
+  #     print(paste0(scenario, " not yet available"))
+  #     return()
+  #   }  
+  
+  p <- fcast_wide %>%
+    filter(stabbr==st, year >= 2015, scenario==!!scenario) %>%
+    select(year, pvar=!!var, method) %>%
+  ggplot(aes(year, pvar, colour=method)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(name="State fiscal year", breaks=seq(2000, 2040, 2)) +
+  scale_y_continuous(name="$ millions", labels = scales::comma) +
+  ggtitle(paste0("Methods for forecasting ", var, " using scenario: ", scenario)) +
+  theme_bw()
+  
+  p
+}
+
+
+osr_method_pctgdp <- function(st, scenario, var){
+  # if(st != "NJ" & scenario != "baseline"){
+  #     print(paste0(scenario, " not yet available"))
+  #     return()
+  #   }  
+  
+  p <- fcast_wide %>%
+    filter(stabbr==st, year >= 2010, scenario==!!scenario) %>%
+    select(year, pvar=!!var, method, stgdp) %>%
+  ggplot(aes(year, pvar / stgdp * 100, colour=method)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(name="State fiscal year", breaks=seq(2000, 2040, 2)) +
+  scale_y_continuous(name="% of state GDP") +
+  ggtitle(paste0("Methods for forecasting ", var, " using scenario: ", scenario)) +
+  theme_bw()
+  
+  p
+}
+
+
 # st <- "NJ"
 # scenario <- "baseline"
 
-osr_bkdwn <- function(st, scenario){
-  if(st != "NJ" & scenario != "baseline"){
-      print(paste0(scenario, " not yet available"))
-      return()
-    }
+osr_bkdwn <- function(st, scenario, method){
+  # if(st != "NJ" & scenario != "baseline"){
+  #     print(paste0(scenario, " not yet available"))
+  #     return()
+  #   }
   
   stname <- stname(st)
   vars <- c("iit", "gst", "cit", "othertax", "tottax", "nontax", "osr")
   
   data <- fcast_wide %>%
-    filter(stabbr==st, scenario==!!scenario, year >= 2018) %>%
-    select(stabbr, year, all_of(vars)) %>%
-    mutate(across(all_of(vars), ~ . * 1e3))
-    
+    filter(stabbr==st, scenario==!!scenario, method==!!method, year >= 2018) %>%
+    select(stabbr, year, all_of(vars))
   
   tab <- data %>%
   gt() %>%  
   tab_header(
       title = paste0(stname, " own-source revenue, $ millions"),
-      subtitle = paste0("Scenario: ", scenario)
+      subtitle = paste0("Scenario: ", scenario, "  --  Method: ", method)
     ) %>%
     cols_label(
       year=html("State fiscal year<br>ending in:")
@@ -935,17 +936,17 @@ osr_bkdwn <- function(st, scenario){
 }
 
 
-osr_pch <- function(st, scenario){
-  if(st != "NJ" & scenario != "baseline"){
-      print(paste0(scenario, " not yet available"))
-      return()
-    }
+osr_pch <- function(st, scenario, method){
+  # if(st != "NJ" & scenario != "baseline"){
+  #     print(paste0(scenario, " not yet available"))
+  #     return()
+  #   }
   
   stname <- stname(st)
   vars <- c("iit", "gst", "cit", "othertax", "tottax", "nontax", "osr")
   
   data <- fcast_wide %>%
-    filter(stabbr==st, scenario==!!scenario, year >= 2017) %>%
+    filter(stabbr==st, scenario==!!scenario, method==!!method, year >= 2017) %>%
     select(stabbr, year, all_of(vars)) %>%
     mutate(across(all_of(vars), ~ . / .[match(year - 1, year)] * 100 - 100))
 
@@ -953,7 +954,7 @@ osr_pch <- function(st, scenario){
     gt() %>%  
     tab_header(
       title = paste0(stname, " own-source revenue, % change"),
-      subtitle = paste0("Scenario: ", scenario)
+      subtitle = paste0("Scenario: ", scenario, "  --  Method: ", method)
       ) %>%
       cols_label(
         year=html("State fiscal year<br>ending in:")
@@ -991,35 +992,35 @@ osr_pch <- function(st, scenario){
 state_report <- function(st){
   stname <- stname(st)
   
-  cat("\n")
-  cat("## ", stname, "Report\n")
+  # cat("\n")
+  cat("## ", stname, " \n")
   
   cat("\n")
-  cat("### Descriptive analysis \n")
+  cat("### ", stname, " History {.tabset} \n")
 
   # The economy
   cat("\n")
-  cat("#### GDP growth for ", stname, "and the US", "\n")
+  cat("#### GDP growth versus US", "\n")
   print(gdp_comp_plot(st))
   plot.new()
   dev.off()
   
   cat("\n")
-  cat("#### ", stname, " GDP growth minus United States GDP growth \n")
+  cat("#### GDP growth minus United States GDP growth \n")
   print(gdp_diff_plot(st))
   plot.new()
   dev.off()
   cat('\n\n')
   
   cat("\n")
-  cat("#### History: ", stname, " state GDP growth and own-source revenue growth \n")
+  cat("#### State GDP growth and own-source revenue growth \n")
   print(gdp_osr_plot(st))
   plot.new()
   dev.off()
   cat('\n\n')
   
   cat("\n")
-  cat("#### History: ", stname, " state income tax, state GDP growth, and lagged national capital gains\n")
+  cat("#### State income tax, state GDP growth, and lagged national capital gains\n")
   print(iit_gdpcg_plot(st))
   plot.new()
   dev.off()
@@ -1027,51 +1028,138 @@ state_report <- function(st){
   
     
   cat("\n")
-  cat("### Forecasts \n")
+  cat("### ", stname, " Forecasts {.tabset}\n")
   
   # OSR forecasts
   cat("\n")
-  cat("#### ", stname, " own-source revenue scenarios\n")
-  print(osr_scen(st))
+  cat("#### Own-source revenue scenarios\n")
+  cat("##### Method: Simple model\n")
+  print(osr_scen(st, method="model"))
   plot.new()
   dev.off()
+  cat("##### Method: Close gap between revenue as % of state GDP, and 2019 value\n")
+  print(osr_scen(st, method="gapclose"))
+  plot.new()
+  dev.off()
+  
+  cat("##### Methods comparison, $ millions, baseline scenario\n")
+  print(osr_method(st, scenario="baseline", var="osr"))
+  plot.new()
+  dev.off()
+  print(osr_method(st, scenario="baseline", var="iit"))
+  plot.new()
+  dev.off()
+  print(osr_method(st, scenario="baseline", var="gst"))
+  plot.new()
+  dev.off()
+  print(osr_method(st, scenario="baseline", var="cit"))
+  plot.new()
+  dev.off()
+  print(osr_method(st, scenario="baseline", var="othertax"))
+  plot.new()
+  dev.off()
+  
+  
+  cat("##### Methods comparison, $ millions, downside scenario\n")
+  print(osr_method(st, scenario="downside", var="osr"))
+  plot.new()
+  dev.off()
+  print(osr_method(st, scenario="downside", var="iit"))
+  plot.new()
+  dev.off()
+  print(osr_method(st, scenario="downside", var="gst"))
+  plot.new()
+  dev.off()
+  print(osr_method(st, scenario="downside", var="cit"))
+  plot.new()
+  dev.off()
+  print(osr_method(st, scenario="downside", var="othertax"))
+  plot.new()
+  dev.off()  
+  
+  cat("##### Methods comparison, % of state GDP, baseline scenario\n")
+  print(osr_method_pctgdp(st, scenario="baseline", var="osr"))
+  plot.new()
+  dev.off()
+  print(osr_method_pctgdp(st, scenario="baseline", var="iit"))
+  plot.new()
+  dev.off()
+  print(osr_method_pctgdp(st, scenario="baseline", var="gst"))
+  plot.new()
+  dev.off()
+  print(osr_method_pctgdp(st, scenario="baseline", var="cit"))
+  plot.new()
+  dev.off()
+  print(osr_method_pctgdp(st, scenario="baseline", var="othertax"))
+  plot.new()
+  dev.off()
+  
+  
+  cat("##### Methods comparison, % of state GDP, downside scenario\n")
+  print(osr_method_pctgdp(st, scenario="downside", var="osr"))
+  plot.new()
+  dev.off()
+  print(osr_method_pctgdp(st, scenario="downside", var="iit"))
+  plot.new()
+  dev.off()
+  print(osr_method_pctgdp(st, scenario="downside", var="gst"))
+  plot.new()
+  dev.off()
+  print(osr_method_pctgdp(st, scenario="downside", var="cit"))
+  plot.new()
+  dev.off()
+  print(osr_method_pctgdp(st, scenario="downside", var="othertax"))
+  plot.new()
+  dev.off()    
+
+  
   cat('\n\n')
   
-  # OSR forecast breakdown
+  # OSR forecast breakdown, alternative scenarios and methods
   cat("\n")
-  cat("#### ", stname, " own-source revenue breakdown - pre-Covid\n")
-  print(osr_bkdwn(st, scenario="precovid"))
+  cat("#### Own-source revenue breakdown - pre-Covid\n")
+  print(osr_bkdwn(st, scenario="precovid", method="model"))
   plot.new()
   dev.off()
-  # cat('\n\n')
+    print(osr_bkdwn(st, scenario="precovid", method="gapclose"))
+  plot.new()
+  dev.off()
   
   cat("\n")
-  cat("#### ", stname, " own-source revenue breakdown - Covid baseline\n")
-  print(osr_bkdwn(st, scenario="baseline"))
+  cat("#### Own-source revenue breakdown - Covid baseline\n")
+  print(osr_bkdwn(st, scenario="baseline", method="model"))
   plot.new()
   dev.off()
-  # cat('\n\n')
+  print(osr_bkdwn(st, scenario="baseline", method="gapclose"))
+  plot.new()
+  dev.off()
   
   cat("\n")
-  cat("#### ", stname, " own-source revenue breakdown - downside\n")
-  print(osr_bkdwn(st, scenario="downside"))
+  cat("#### Own-source revenue breakdown - downside\n")
+  print(osr_bkdwn(st, scenario="downside", method="model"))
   plot.new()
   dev.off()
-  # cat('\n\n')
+  print(osr_bkdwn(st, scenario="downside", method="gapclose"))
+  plot.new()
+  dev.off()
   
   cat("\n")
-  cat("#### ", stname, " own-source revenue breakdown, % change - Covid baseline\n")
-  print(osr_pch(st, scenario="baseline"))
+  cat("#### Own-source revenue breakdown, % change - Covid baseline\n")
+  print(osr_pch(st, scenario="baseline", method="model"))
   plot.new()
   dev.off()
-  # cat('\n\n')
+  print(osr_pch(st, scenario="baseline", method="gapclose"))
+  plot.new()
+  dev.off()
   
   cat("\n")
-  cat("#### ", stname, " own-source revenue breakdown, % change - downside\n")
-  print(osr_pch(st, scenario="downside"))
+  cat("#### Own-source revenue breakdown, % change - downside\n")
+  print(osr_pch(st, scenario="downside", method="model"))
   plot.new()
   dev.off()
-  # cat('\n\n')
+  print(osr_pch(st, scenario="downside", method="gapclose"))
+  plot.new()
+  dev.off()
   
 }
 
@@ -1083,45 +1171,96 @@ state_report <- function(st){
 
 state_report("MA")
 state_report("NJ")
- 
 
 ```
 
 
 
+# Goals and methods
 
-```{r nontax_analysis, eval=FALSE}
-# history growth tax nontax gdp
-# df <- stgdp %>%
-#   filter(stabbr==st, src=="cbo_jul2020") %>%
-#   mutate(name="gdp") %>%
-#   bind_rows(osr %>% filter(stabbr==st, name %in% c("tottax", "nontax"))) %>%
-#   filter(year %in% 1990:2018) %>%
-#   group_by(name) %>%
-#   mutate(pch=value / value[match(year - 1, year)] * 100 - 100) %>%
-#   ungroup %>%
-#   select(-src, -value)
+## Goals
 
-# does a simple regression tell us whether nontax is more closely associated with gdp or tottax? NO
-# dfw <- df %>%
-#   pivot_wider(values_from = pch)
-# summary(lm(nontax ~ tottax, data=dfw))
-# summary(lm(nontax ~ gdp, data=dfw))  # coeff on gdp clearly not signif diff from 1
-# 
-# 
-# summary(lm(nontax ~ tottax, data=dfw %>% filter(!year %in% c(1992, 2003, 2004))))
-# summary(lm(nontax ~ gdp, data=dfw %>% filter(!year %in% c(1992, 2003, 2004))))
+Goal is to forecast state own-source revenue (osr) and components using a method that:
 
-# df %>%
-#   ggplot(aes(year, pch, colour=name)) +
-#   geom_line() +
-#   geom_point() +
-#   scale_x_continuous(breaks=seq(1990, 2020, 5)) +
-#   scale_y_continuous(breaks=seq(-40, 50, 5)) +
-#   geom_hline(yintercept = 0)
+*   is compatible with a state's own short-term forecasts,
+*   stabilizes in the longer term to grow at the rate of state gdp, and
+*   can be applied to individual states with a minimal amount of digging for new information
 
 
-```
+Key forecast elements:
+
+*   State own-source revenue and major components
+    +   using Census definitions
+    +   state fiscal years (periods ending in June)
+    +   nominal
+    +   $ millions
+    +   2021 through 2030
+    
+*   National economic forecast - uses one of the relatively current forecasts provided by Pew:
+    +   CBO July 2020 (baseline)
+    +   Moody's December 2020, p50 (baseline) - the most-current full forecast we have
+    +   Moody's July 2020, p50
+    +   Moody's July 2020, p90 (S3 - severe stress scenario)
+    +   (We also have available a Moody's December 2019 baseline forecast, not used)
+    +   Federal Reserve alternative severe forecast
+    
+*   State economic forecast:
+
+    +   available state GDP forecasts are Moody's baseline forecasts released in December 2019, July 2020, and December 2020, each of which also has an associated Moody's national forecast
+    +   to get state GDP forecasts under different national scenarios, I assume the difference between a state's growth rate and the national growth rate is the same as it is in the most-recent Moody's forecast (December 2020)
+
+*   Equity return forecasts - factor into capital gains forecasts, which in turn affect the income tax. There are two equity return forecasts (domestic equities)
+    +   pew_baseline -- the Pew Covid baseline -- **Note that this is not consistent with the CBO July 2020 economic forecast**
+    +   pew_fedalt
+    
+*   Capital gains forecasts
+
+    +   From a simple model based upon national GDP, S&P 500, and capital gains history
+    +   Forecast varies depending on which national GDP forecast is used and which equity forecast is used
+  
+
+Overall approach for OSR and components:
+
+*   2019 and earlier - Census
+*   2020 - tax growth rates from Census quarterly data; nontax based on state GDP estimate
+*   2021 uses growth rates from a state governmental forecast, or inferred from those forecasts; nontax revenue assumed to grow at rate of state GDP
+*   2022-2024 taxes are from simple models:
+    +   income tax based upon state GDP, national capital gains, and its own history
+    +   other tax categories based upon state GDP and the tax's own history
+    +   nontax revenue assumed to grow at the rate of GDP
+*   2025-2030 - all osr components are a constant % of GDP - their presumed long-term average (thus, all osr components grow at the same rate as state GDP)
+
+Scenarios: Three factors determine a scenario
+
+*   Which national economic forecast is used
+*   Which equity forecast is used
+*   Which governmental short-term forecast is used
+
+Some combinations of these will not make sense (e.g., fedalt equity forecast might not make sense to combine with the CBO pre-covid economic forecast).
+
+Currently I am using the Moody's December 2020 economic forecast as the best economic forecast. I know you prefer CBO July. We should discuss.
+
+Here are the scenarios I am using (as of now):
 
 
+  stabbr govtfc      econfc         equityfc      scenario
 
+  NJ     ols_sep2020 moodys_dec2020 pew_covidbase baseline
+  NJ     gov_aug2020 fedalt         pew_fedalt    downside
+  NJ     gov_bmxleg  cbo_precovid   pew_covidbase precovid
+  
+  MA     bhi_oct2020 moodys_dec2020 pew_covidbase baseline
+
+
+Selected issues and considerations:
+
+*   Uses Census definitions of OSR and thus is different from what policymakers in NJ are familiar with
+*   Assumes all revenue sources move from their 2021 values to longer term values, as % of GDP; historically, other tax revenue has tended to decline as % of GDP until policymakers explicitly raise it
+*   Because the 2021 OSR estimate is based on a fixed governmental forecast, and is independent of the economic forecast, it may seem odd in relation to a severe-downturn economic forecast for FY 2021 - in particular, OSR as a percent of GDP is unusually high in 2021 when using the Moody's p90 forecast (because gdp is so low in that forecast)
+
+## Data sources [details to come]
+
+*   US GDP history: BEA NIPA tables, quarterly converted to state fiscal year (July-June)
+*   State GDP history: BEA data, spliced NAICS and SIC; quarterly converted to state fiscal year, adjusted
+*   US GDP forecasts:
+    +   CBO pre-covid
