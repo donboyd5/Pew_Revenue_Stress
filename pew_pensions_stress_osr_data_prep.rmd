@@ -184,6 +184,8 @@ count(dfsave, stabbr) # DC and 50 states
 
 # National gdp forecasts
 
+Create data frames that have year, <name> where year is a fiscal year and <name> has nominal gdp in $ millions.
+
 
 ```{r file_notes}
 # files received from Kimberly Burnham Jan 6 and 7 2020
@@ -252,6 +254,34 @@ count(dfsave, stabbr) # DC and 50 states
 #              "Moodys State Household Income December 2020.xlsx",
 #              "Moodys State Pop Age December 2020.xlsx",
 #              "Moodys GSP July 2020.xlsx")
+
+```
+
+
+## National gdp forecast from CBO Feb 2021
+```{r}
+# year, cbo_feb2021
+fn <- "51135-2021-02-economicprojections.xlsx"
+(yqvec <- paste0(2017:2031, "Q"))
+(cnames <- paste0(rep(yqvec, each=4), 1:4))
+dfq <- read_excel(here::here("ignore", "CBO", "Feb2021", fn), 
+           sheet="1. Quarterly",
+           range="E9:BL9",
+           col_names=cnames) %>%
+  pivot_longer(-0) %>%
+  mutate(date=qy(str_sub(name, -1) %>%
+                   as.numeric,
+                 str_sub(name, 1, 4) %>% as.numeric))
+dfq
+
+gdp_cbo_feb2021 <- dfq %>%
+  mutate(year=ifelse(month(date) <= 6,
+                     year(date),
+                     year(date) + 1)) %>%
+  filter(year %in% 2018:2031) %>%
+  group_by(year) %>%
+  summarise(cbo_feb2021=mean(value) * 1000)
+
 
 ```
 
@@ -388,10 +418,66 @@ df %>%
 ```
 
 
+```{r}
+gdp_master %>%
+  select(-moodys_jul2020p50) %>%
+  left_join(gdp_moodys_jul2020, by="year") %>%
+  left_join(gdp_moodys_dec2019, by="year") %>%
+  left_join(gdp_moodys_dec2020, by="year") %>%
+  left_join(gdp_cbo_feb2021, by="year")
+
+# only minimal differences from history in 2019, but substantial differences in 2020
+
+```
+
+
+## Create combined US gdp file using BEA history where not provided
+```{r}
+gdphist <- readRDS(here::here("data", "usgdp_history.rds"))
+summary(gdphist)
+
+usgdp1 <- gdphist %>%
+  filter(name=="gdp") %>%
+  select(year, gdphist=value) %>%
+  full_join(gdp_master %>% select(-moodys_jul2020p50), by="year") %>%
+  full_join(gdp_moodys_jul2020, by="year") %>%
+  full_join(gdp_moodys_dec2019, by="year") %>%
+  full_join(gdp_moodys_dec2020, by="year") %>%
+  full_join(gdp_cbo_feb2021, by="year")
+summary(usgdp1)
+# gdp_moody_dec2019
+# gdp_moody_dec2020
+
+usgdp1 %>% filter(year %in% 2010:2025)
+
+usgdp1 %>% filter(year %in% 2010:2025) %>%
+  mutate(ratio=moodys_dec2020 / gdphist * 10000)
+
+# replace
+usgdp <- usgdp1 %>%
+  mutate(across(.cols=-c(year, gdphist), ~ ifelse(is.na(.), gdphist, .))) %>%
+  filter(year <= 2030)
+summary(usgdp) # good, the only NAs are gdphist, which is because it does not have forecasts
+
+usgdp %>%
+  select(-gdphist) %>%
+  filter(year >= 2015) %>%
+  pivot_longer(-year) %>%
+  ggplot(aes(year, value, colour=name)) +
+  geom_line() +
+  geom_point() 
+
+saveRDS(usgdp, here::here("data", "usgdp.rds"))
+
+```
+
+
+
+# State gdp forecasts
+
 ## State GDP forecasts from Moody's December 2020 "Moody's GSP December 2020.xlsx"
 
 *  "Moody's GSP December 2020.xlsx"
-*  construct US as sum of the 50 states plus DC
 
 
 ```{r ONETIME_get_moodysdec2020_states_from_Kimberly, eval=FALSE}
@@ -447,60 +533,6 @@ saveRDS(df3, here::here("data", "stgdp_moodys_dec2020.rds"))
 
 ```
 
-
-```{r}
-gdp_master %>%
-  select(-moodys_jul2020p50) %>%
-  left_join(gdp_moodys_jul2020, by="year") %>%
-  left_join(gdp_moodys_dec2019, by="year") %>%
-  left_join(gdp_moodys_dec2020, by="year")
-
-# only minimal differences from history in 2019, but substantial differences in 2020
-
-```
-
-
-## Create combined US gdp file using BEA history where not provided
-```{r}
-gdphist <- readRDS(here::here("data", "usgdp_history.rds"))
-summary(gdphist)
-
-usgdp1 <- gdphist %>%
-  filter(name=="gdp") %>%
-  select(year, gdphist=value) %>%
-  full_join(gdp_master %>% select(-moodys_jul2020p50), by="year") %>%
-  full_join(gdp_moodys_jul2020, by="year") %>%
-  full_join(gdp_moodys_dec2019, by="year") %>%
-  full_join(gdp_moodys_dec2020, by="year")
-summary(usgdp1)
-# gdp_moody_dec2019
-# gdp_moody_dec2020
-
-usgdp1 %>% filter(year %in% 2010:2025)
-
-usgdp1 %>% filter(year %in% 2010:2025) %>%
-  mutate(ratio=moodys_dec2020 / gdphist * 10000)
-
-# replace
-usgdp <- usgdp1 %>%
-  mutate(across(.cols=-c(year, gdphist), ~ ifelse(is.na(.), gdphist, .))) %>%
-  filter(year <= 2030)
-summary(usgdp) # good, the only NAs are gdphist, which is because it does not have forecasts
-
-usgdp %>%
-  select(-gdphist) %>%
-  filter(year >= 2015) %>%
-  pivot_longer(-year) %>%
-  ggplot(aes(year, value, colour=name)) +
-  geom_line() +
-  geom_point() 
-
-saveRDS(usgdp, here::here("data", "usgdp.rds"))
-
-```
-
-
-# State gdp forecasts
 
 ## Get differences in % change Moody's US vs states
 ```{r}
@@ -610,6 +642,103 @@ rm(tmp, vars, osr, osr_long)
 ```
 
 
+```{r ONETIME_census_statefin}
+# use these data whereever possible
+
+cdir <- "D:/Data/CensusFinanceData/GOVSTIMESERIES.GS00SG01_2021-02-10T134139/"
+cfn <- "GOVSTIMESERIES.GS00SG01_data_with_overlays_2021-02-10T134136.csv"
+
+df <- read_csv(paste0(cdir, cfn))
+glimpse(df)
+count(df, NAME) # 50 states plus bad rec
+count(df, YEAR) # 2012-2019
+count(df, AGG_DESC, AGG_DESC_LABEL)
+
+df2 <- df %>%
+  filter(row_number() > 1,
+         AGG_DESC %in% c("SF0003", "SF0004", "SF0005", "SF0006", "SF0009", "SF0010", "SF0013", "SF0014")) %>%
+  mutate(name=fct_recode(AGG_DESC,
+                         genrev = "SF0003",
+                         igr = "SF0004",
+                         tottax = "SF0005",
+                         gst = "SF0006",
+                         iit = "SF0009",
+                         cit = "SF0010",
+                         charges = "SF0013",
+                         misc = "SF0014"),
+         stabbr = state.abb[match(NAME, state.name)],
+         year=as.integer(YEAR),
+         value=as.numeric(AMOUNT)) %>%
+  select(stabbr, year, name, value) %>%
+  pivot_wider() %>%
+  replace(is.na(.), 0) %>%
+  mutate(othertax = tottax - iit - gst - cit,
+         nontax = charges + misc,
+         nontax2 = genrev - igr - tottax,
+         osr = tottax + nontax)
+  
+# naz(iit) + naz(gst) + naz(cit) + naz(othertax)
+df2
+
+df3 <- df2 %>%
+  select(stabbr, year, cit, gst, iit, nontax, osr, othertax, tottax) %>%
+  pivot_longer(-c(stabbr, year)) %>%
+  mutate(value=value / 1e3)
+
+saveRDS(df3, here::here("data", "osr_census_recent.rds"))
+
+# osr_long %>% filter(year==2012, stabbr=="AL") %>% mutate(value=value * 1000)
+# df2 %>% filter(year==2012, stabbr=="AL")
+# + 4949273 - 4902593 
+# 
+# df3 <- osr_long %>%
+#   filter(name=="nontax") %>%
+#   mutate(nontax_djb=value * 1000,
+#          type="boyd") %>%
+#   select(-c(name, value)) %>%
+#   inner_join(df2 %>% select(stabbr, year, nontax, nontax2))
+# 
+# ht(df3)
+
+# stabbr  year name       value
+
+# 1 cit       3172
+# 2 gst       3172
+# 3 iit       3172
+# 4 nontax    3172
+# 5 osr       3172
+# 6 othertax  3172
+# 7 tottax    3172
+
+         # MSR_RESULT_ID = fct_collapse(MMM_MBR_CND_STATUS_CD,
+         #                          calc_crg_1 = as.character(1:2),
+         #                          calc_crg_2 = as.character(3:4),
+         #                          calc_crg_3 = as.character(5:9))) 
+
+```
+
+
+```{r ONETIME_osrcensus_to2019}
+df1 <- readRDS(here::here("data", "osr_census.rds"))
+df2 <- readRDS(here::here("data", "osr_census_recent.rds"))
+summary(df1)  # 1902-2018
+summary(df2)  # 2012 - 2019
+count(df1, stabbr)  # includes DC, US
+count(df2, stabbr)  # 50 states
+
+df3 <- bind_rows(df1 %>% filter(stabbr %in% state.abb, year < 2012), df2)
+summary(df3)
+count(df3, stabbr)
+count(df3, year)
+count(df3, name)
+saveRDS(df3, here::here("data", "osr_census_history.rds"))
+
+
+```
+
+
+
+
 ```{r ONETIME_qtax_taxgrowth_for20192020}
 # use qtax growth rates to help update osr
 # get ratio to 2018 for 2019 and 2020
@@ -630,23 +759,25 @@ count(df, name)
 ht(df)
 
 taxgrowth <- df %>%
-  filter(year >= 2018) %>%
+  filter(year >= 2019,
+         stabbr %in% state.abb) %>%
   group_by(stabbr, name) %>%
-  mutate(ratio=value / value[year==2018]) %>%
+  mutate(ratio=value / value[year==2019]) %>%
   ungroup %>%
   select(year, stabbr, name, ratio)
+summary(taxgrowth)
 
 ```
 
 
-```{r ONETIME_Moodysgdp_nontaxgrowth_for20192020}
+```{r ONETIME_nontaxgrowth_for2020}
 # for nontax, use 2019 and 2020 gdp growth unless we get other data
 stgdp <- readRDS(here::here("data", "stgdp.rds"))
 
 nontaxgrowth <- stgdp %>%
-  select(year, stabbr, moodys_dec2020) %>%
-  filter(year %in% 2018:2020) %>%
-  mutate(ratio=moodys_dec2020 / moodys_dec2020[year==2018],
+  select(year, stabbr, gdp=cbo_feb2021) %>%
+  filter(year %in% 2019:2020) %>%
+  mutate(ratio=gdp / gdp[year==2019],
          name="nontax") %>%
   select(year, stabbr, name, ratio)
 
@@ -659,17 +790,17 @@ nontaxgrowth <- stgdp %>%
 #   fy growth rates for taxes from qtax data
 #   fy growth rates for nontax from Moody's july 2020 state gdp
 
-osrhist <- readRDS(here::here("data", "osr_census.rds"))
+osrhist <- readRDS(here::here("data", "osr_census_history.rds"))
 summary(osrhist)
 
 growth <- bind_rows(taxgrowth, nontaxgrowth)
 
 osrupdate <- bind_rows(osrhist, 
-                       growth %>% filter(year %in% 2019:2020)) %>%
+                       growth %>% filter(year %in% 2020)) %>%
   group_by(stabbr, name) %>%
   arrange(year) %>%
-  mutate(value=ifelse(year %in% 2019:2020, 
-                      value[year==2018] * ratio,
+  mutate(value=ifelse(year %in% 2020, 
+                      value[year==2019] * ratio,
                       value)) %>%
   ungroup %>%
   select(year, stabbr, name, value) %>%
@@ -691,6 +822,15 @@ osrupdate %>%
 saveRDS(osrupdate, here::here("data", "osr_census_updated.rds"))
 
 rm(osrhist, taxgrowth, nontaxgrowth, osrupdate)
+
+osrupdate <- readRDS(here::here("data", "osr_census_updated.rds"))
+osrupdate %>%
+  filter(stabbr=="PA", name=="osr") %>%
+  filter(year >= 1990) %>%
+  ggplot(aes(year, value)) +
+    geom_line() +
+    geom_point() +
+    scale_x_continuous(breaks=seq(1900, 2030, 5))
 
 ```
 
@@ -729,6 +869,37 @@ pctgdp %>% filter(stabbr=="NJ")
 pctgdp %>% filter(stabbr=="MA")
   
 saveRDS(pctgdp, here::here("data", "osr_pctgdp.rds"))
+
+```
+
+
+##  Pew projections of own-source revenue
+```{r}
+fn <- "Boyd Extraction Of Pew OSR Projections.xlsx"
+sts <- c("MN", "NJ")
+
+get_stosr <- function(st){
+  read_excel(here::here("ignore", "pew", fn),
+             sheet=st,
+             range = "A3:J38",
+             col_names = c(LETTERS[1:10])) %>%
+    mutate(stabbr=st) %>%
+    select(year=A, 
+           stabbr,
+           pew_precovid=B,
+           pew_baseline=F,
+           pew_downside=J)
+}
+
+get_stosr("MN")
+
+pewosr <- map_dfr(sts, get_stosr) %>%
+  pivot_longer(-c(year, stabbr),
+               names_to = "scenario",
+               values_to = "osr")
+
+saveRDS(pewosr, here::here("data", "pew_osrforecasts.rds"))
+
 
 ```
 
