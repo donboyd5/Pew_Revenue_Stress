@@ -297,7 +297,7 @@ gdp_cbo_feb2021 <- dfq %>%
 ```{r}
 # CBO pre-COVID	CBO July	Moody's 50th July	Lena Fed W	Fed Alt Severe
 gdpfn <- "GDP MASTER FILE_20201021.xlsx"
-vnames <- c("cbo_precovid", "cbo_jul2020", "moodys_jul2020p50", "lena_fed", "fedalt")
+vnames <- c("cbo_jan2020", "cbo_jul2020", "moodys_jul2020p50", "lena_fed", "fedalt")
 
 sfy <- read_excel(here::here("ignore", "pew", gdpfn), 
                   sheet="GDP", range="A3:A14", col_names = "year")
@@ -551,7 +551,7 @@ pchdiff <- mstgdp  %>%
          pdelta=pch - pchus)
 pchdiff
 
-# pchdiff %>% filter(stabbr=="NJ")
+# pchdiff %>% filter(stabbr=="MA")
 
 
 ```
@@ -639,6 +639,8 @@ osr_long <- osr %>%
 saveRDS(osr_long, here::here("data", "osr_census.rds"))
 rm(tmp, vars, osr, osr_long)
 
+osr %>% filter(stabbr=="MA")
+
 ```
 
 
@@ -714,6 +716,7 @@ saveRDS(df3, here::here("data", "osr_census_recent.rds"))
          #                          calc_crg_1 = as.character(1:2),
          #                          calc_crg_2 = as.character(3:4),
          #                          calc_crg_3 = as.character(5:9))) 
+df2 %>% filter(stabbr=="RI")
 
 ```
 
@@ -758,14 +761,34 @@ df <- qtax %>%
 count(df, name)
 ht(df)
 
-taxgrowth <- df %>%
+# tax growth 2020 per census qtax
+taxgrowth_qtax <- df %>%
   filter(year >= 2019,
          stabbr %in% state.abb) %>%
   group_by(stabbr, name) %>%
   mutate(ratio=value / value[year==2019]) %>%
   ungroup %>%
-  select(year, stabbr, name, ratio)
-summary(taxgrowth)
+  select(year, stabbr, name, ratio) %>%
+  filter(year==2020, name %in% c("iit", "gst", "cit", "othertax"))
+summary(taxgrowth_qtax)
+
+# overrides
+#          iit	gst	cit	othertax
+# MN	2020	-2.5%	-0.3%	-4.8%	-4.1%		gov_nov2020
+overrides <- tribble(~stabbr, ~year, ~iit, ~gst, ~cit, ~othertax,
+                     "MN", 2020, -.025, -.003, -.048, -.041) %>%
+  pivot_longer(-c(stabbr, year)) %>%
+  mutate(ratio=1 + value) %>%
+  select(-value)
+
+taxgrowth <- taxgrowth_qtax %>%
+  anti_join(overrides %>% select(year, stabbr) %>% distinct,
+            by=c("year", "stabbr")) %>%
+  bind_rows(overrides)
+  
+  
+taxgrowth %>% filter(stabbr=="MA")
+
 
 ```
 
@@ -779,7 +802,8 @@ nontaxgrowth <- stgdp %>%
   filter(year %in% 2019:2020) %>%
   mutate(ratio=gdp / gdp[year==2019],
          name="nontax") %>%
-  select(year, stabbr, name, ratio)
+  select(year, stabbr, name, ratio) %>%
+  filter(year==2020)
 
 ```
 
@@ -794,9 +818,10 @@ osrhist <- readRDS(here::here("data", "osr_census_history.rds"))
 summary(osrhist)
 
 growth <- bind_rows(taxgrowth, nontaxgrowth)
+summary(growth)
 
 osrupdate <- bind_rows(osrhist, 
-                       growth %>% filter(year %in% 2020)) %>%
+                       growth) %>%
   group_by(stabbr, name) %>%
   arrange(year) %>%
   mutate(value=ifelse(year %in% 2020, 
@@ -825,7 +850,7 @@ rm(osrhist, taxgrowth, nontaxgrowth, osrupdate)
 
 osrupdate <- readRDS(here::here("data", "osr_census_updated.rds"))
 osrupdate %>%
-  filter(stabbr=="PA", name=="osr") %>%
+  filter(stabbr=="MN", name=="osr") %>%
   filter(year >= 1990) %>%
   ggplot(aes(year, value)) +
     geom_line() +
@@ -875,8 +900,10 @@ saveRDS(pctgdp, here::here("data", "osr_pctgdp.rds"))
 
 ##  Pew projections of own-source revenue
 ```{r}
-fn <- "Boyd Extraction Of Pew OSR Projections.xlsx"
-sts <- c("MN", "NJ")
+# fn <- "Boyd Extraction Of Pew OSR Projections.xlsx"
+fn <- "Boyd Extraction Of Pew OSR Projections_v2.xlsx"
+# sts <- c("MN", "NJ")
+sts <- c("MA", "MN", "NJ")
 
 get_stosr <- function(st){
   read_excel(here::here("ignore", "pew", fn),
@@ -891,7 +918,7 @@ get_stosr <- function(st){
            pew_downside=J)
 }
 
-get_stosr("MN")
+get_stosr("MA")
 
 pewosr <- map_dfr(sts, get_stosr) %>%
   pivot_longer(-c(year, stabbr),
@@ -973,7 +1000,7 @@ usgdp <- readRDS(here::here("data", "usgdp.rds"))
 capgains1 <- read_excel(here::here("ignore", "boyd", "finance.xlsx"), sheet="capgains")
 
 capgains <- capgains1 %>%
-  select(year, cbo_precovid=cbojan2020, cbo_jul2020=cbospliced)
+  select(year, cbo_jan2020=cbojan2020, cbo_jul2020=cbospliced)
 ht(capgains)
 
 # forecast capgains variants using usgdp and sp500
@@ -1046,7 +1073,7 @@ count(cgfcast, gdpname, eqname)
 
 cgfcast %>%
   filter(year >= 2015) %>%
-  filter((gdpname=="cbo_precovid" & eqname=="pew_covidbase") |
+  filter((gdpname=="cbo_jan2020" & eqname=="pew_covidbase") |
          (gdpname=="cbo_jul2020" & eqname=="pew_covidbase") |
          (gdpname=="moodys_dec2020" & eqname=="pew_covidbase") |
          (gdpname=="fedalt" & eqname=="pew_covidbase") |

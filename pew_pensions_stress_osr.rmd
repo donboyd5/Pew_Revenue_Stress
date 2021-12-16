@@ -72,7 +72,7 @@ pch <- function(df){
   df2$pch
 }
 
-stname <- function(stabbr){
+get_stname <- function(stabbr){
   state.name[state.abb == stabbr]
 }
 
@@ -115,7 +115,7 @@ pewosr <- readRDS(here::here("data", "pew_osrforecasts.rds"))
 fn <- "assumptions.xlsx"
 
 assume <- read_excel(here::here("data", fn), sheet="osr_forecasts") %>%
-  filter(!is.na(stabbr)) %>%
+  filter(!is.na(stabbr), year==2021) %>%
   # convert to percentage
   mutate(across(c(iit, cit, gst, othertax, nontax), ~ . * 100))
 assume
@@ -131,34 +131,18 @@ assume
 scenarios <- tribble(
   ~stabbr, ~scenario, ~econfc, ~equityfc, ~govtfc,
 
-  "MA",  "precovid", "cbo_precovid", "pew_covidbase", "consensus_jan2020",
+  "MA",  "precovid", "cbo_jan2020", "pew_covidbase", "consensus_jan2020",
   "MA",  "baseline", "cbo_feb2021", "pew_covidbase", "gov_oct2020",
   "MA",  "downside", "fedalt", "pew_fedalt", "gov_oct2020", 
   
-  "MN",  "precovid", "cbo_precovid", "pew_covidbase", "gov_feb2020",
+  "MN",  "precovid", "cbo_jan2020", "pew_covidbase", "gov_feb2020",
   "MN",  "baseline", "cbo_feb2021", "pew_covidbase", "gov_nov2020",
   "MN",  "downside", "fedalt", "pew_fedalt", "gov_nov2020",
   
-  "NJ",  "precovid", "cbo_precovid", "pew_covidbase", "gov_bmxleg",  
+  "NJ",  "precovid", "cbo_jan2020", "pew_covidbase", "gov_bmxleg",  
   "NJ",  "baseline", "cbo_feb2021", "pew_covidbase",  "ols_sep2020",
   "NJ",  "downside", "fedalt", "pew_fedalt", "gov_aug2020",
 )
-
-# scenarios <- tribble(
-#   ~stabbr, ~scenario, ~econfc, ~equityfc, ~govtfc,
-# 
-#   "MA",  "precovid", "cbo_precovid", "pew_covidbase", "consensus_jan2020",
-#   "MA",  "baseline", "moodys_dec2020", "pew_covidbase", "gov_oct2020",
-#   "MA",  "downside", "fedalt", "pew_fedalt", "gov_oct2020", 
-#   
-#   "MN",  "precovid", "cbo_precovid", "pew_covidbase", "gov_feb2020",
-#   "MN",  "baseline", "moodys_dec2020", "pew_covidbase", "gov_nov2020",
-#   "MN",  "downside", "fedalt", "pew_fedalt", "gov_nov2020",
-#   
-#   "NJ",  "precovid", "cbo_precovid", "pew_covidbase", "gov_bmxleg",  
-#   "NJ",  "baseline", "moodys_dec2020", "pew_covidbase",  "ols_sep2020",
-#   "NJ",  "downside", "fedalt", "pew_fedalt", "gov_aug2020",
-# )
 
 
 ```
@@ -232,7 +216,7 @@ plot_fc <- function(fcorder, titlepre){
 ### All available national forecasts
 ```{r include=TRUE, fig.width=10, fig.height=6}
 
-fcorder <- c("cbo_precovid", "moodys_dec2019", "cbo_jul2020", "moodys_jul2020p50",
+fcorder <- c("cbo_jan2020", "moodys_dec2019", "cbo_jul2020", "moodys_jul2020p50",
              "moodys_dec2020", "cbo_feb2021",
              "moodys_jul2020p90", "fedalt")
 plot_fc(fcorder, "All")
@@ -243,7 +227,7 @@ plot_fc(fcorder, "All")
 ### Pre-Covid national forecasts
 ```{r include=TRUE, fig.width=10, fig.height=6}
 
-fcorder <- c("cbo_precovid", "moodys_dec2019")
+fcorder <- c("cbo_jan2020", "moodys_dec2019")
 plot_fc(fcorder, "Pre-Covid") +
   scale_colour_manual(values=c("blue", "darkgreen"))
 
@@ -325,7 +309,7 @@ The combination of the fedalt economic scenario plus the fedalt equity-return as
 
 cgfcast %>%
   filter(year >= 2010) %>%
-  filter((gdpname=="cbo_precovid" & eqname=="pew_covidbase") |
+  filter((gdpname=="cbo_jan2020" & eqname=="pew_covidbase") |
          (gdpname=="cbo_jul2020" & eqname=="pew_covidbase") |
          (gdpname=="moodys_dec2020" & eqname=="pew_covidbase") |
          (gdpname=="fedalt" & eqname=="pew_covidbase") |
@@ -457,7 +441,7 @@ assume2021 <- assume %>%
               select(stabbr, year, econfc=forecast, gdppch=pch), 
             by = c("stabbr", "year", "econfc")) %>%
   mutate(nontax=ifelse(is.na(nontax), gdppch, nontax)) %>%
-  select(-gdppch)
+  select(-gdppch, -use, -notes)
 assume2021
 
 assume2021_long <-
@@ -507,6 +491,7 @@ fcast_ts <- fcast %>%
 a <- proc.time()
 revmods <- fcast_ts %>%
   filter(year <= 2021) %>%
+  # filter(stabbr=="NJ", scenario=="precovid") %>%
   model(modcg = ARIMA(rev ~ stgdp_b + capgains_lag),
         modbase = ARIMA(rev ~ stgdp_b))
 b <- proc.time()
@@ -593,11 +578,11 @@ fcast_gap %>%
          troughpct, longrun_targetpct, troughgap, year_targetpct, fcgap) %>%
   arrange(stabbr, scenario, revtype, year)
 
-fcast_gap %>%
-  filter(stabbr=="NJ", year <=2026) %>%
-  select(stabbr, scenario, year, revtype, stgdp, troughpct, longrun_targetpct,
-         troughgap, year_targetpct, fcgap) %>%
-  arrange(stabbr, scenario, revtype, year)
+# fcast_gap %>%
+#   filter(stabbr=="NJ", year <=2026) %>%
+#   select(stabbr, scenario, year, revtype, stgdp, troughpct, longrun_targetpct,
+#          troughgap, year_targetpct, fcgap) %>%
+#   arrange(stabbr, scenario, revtype, year)
   
 
 
@@ -636,7 +621,7 @@ fcast2 <- fcast %>%
 
 # fcast2 %>% filter(stabbr=="NJ", year %in% 2020:2025) %>% select(year, rev, fcmod, fcgap)
 fcast2 %>% 
-  filter(stabbr=="NJ", year %in% 2020:2026, scenario=="baseline", revtype=="iit") %>% 
+  filter(stabbr=="MN", year %in% 2020:2026, scenario=="baseline", revtype=="iit") %>% 
   select(year, revtype, stgdp_pch, istgdp, rev, fcmod, fcgap)
   
 # long
@@ -817,7 +802,7 @@ gdp_osr_plot <- function(st){
 }
 
 iit_gdpcg_plot <- function(st){
-  stname <- stname(st)
+  stname <- get_stname(st)
   
   recuse <- recessions %>%
     filter(rec_year > 1995)
@@ -923,7 +908,7 @@ osr_bkdwn <- function(st, scenario, method){
   #     return()
   #   }
   
-  stname <- stname(st)
+  stname <- get_stname(st)
   vars <- c("iit", "gst", "cit", "othertax", "tottax", "nontax", "osr")
   
   data <- fcast_wide %>%
@@ -973,7 +958,7 @@ osr_pch <- function(st, scenario, method){
   #     return()
   #   }
   
-  stname <- stname(st)
+  stname <- get_stname(st)
   vars <- c("iit", "gst", "cit", "othertax", "tottax", "nontax", "osr")
   
   data <- fcast_wide %>%
@@ -1020,8 +1005,18 @@ osr_pch <- function(st, scenario, method){
 #   use plot.new(), dev.off()
 #  cat('\n\n<!-- -->\n\n') may be needed if there are problems
 
+# st <- "MA"
+# st <- "MN"
+
+# scenario <- "baseline"
+# scenario <- "downside"
+
+# method <- "model"
+# method <- "gapclose"
+
+
 state_report <- function(st){
-  stname <- stname(st)
+  stname <- get_stname(st)
   
   cat("\n")
   cat("## ", stname, " \n")
@@ -1237,7 +1232,8 @@ f <- function(scen, st){
     geom_line() +
     geom_point() +
     ggtitle("Comparison of Pew OSR forecast to Boyd model forecast",
-            subtitle = paste0("For ", scen, " scenario, for: ", stname(st)))
+            subtitle = paste0("For ", scen, " scenario, for: ", get_stname(st))) +
+    theme_bw()
 }
 
 
@@ -1249,7 +1245,8 @@ fgap <- function(scen, st){
     geom_line() +
     geom_point() +
     ggtitle("Comparison of Pew OSR forecast to Boyd gap-closing forecast",
-            subtitle = paste0("For ", scen, " scenario, for: ", stname(st)))
+            subtitle = paste0("For ", scen, " scenario, for: ", get_stname(st))) +
+    theme_bw()
 }
 
 
@@ -1257,11 +1254,17 @@ fgap <- function(scen, st){
 
 
 ```{r fccomp, include=TRUE}
+f("baseline", "MA")
+f("downside", "MA")
+
 f("baseline", "MN")
 f("downside", "MN")
 
 f("baseline", "NJ")
 f("downside", "NJ")
+
+fgap("baseline", "MA")
+fgap("downside", "MA")
 
 fgap("baseline", "MN")
 fgap("downside", "MN")
@@ -1343,7 +1346,7 @@ Here are the scenarios I am using (as of now):
 
   NJ     ols_sep2020 moodys_dec2020 pew_covidbase baseline
   NJ     gov_aug2020 fedalt         pew_fedalt    downside
-  NJ     gov_bmxleg  cbo_precovid   pew_covidbase precovid
+  NJ     gov_bmxleg  cbo_jan2020   pew_covidbase precovid
   
   MA     bhi_oct2020 moodys_dec2020 pew_covidbase baseline
 

@@ -197,3 +197,19 @@ aus_retail %>%
   forecast(h = "2 years") %>% 
   autoplot(filter(aus_retail, year(Month) > 2010), level = NULL)
 
+
+osr
+
+osr %>%
+  filter(stabbr=="MA", year >= 2017) %>%
+  select(-pch) %>%
+  pivot_wider()
+
+qtax %>%
+  filter(stabbr=="MA", year(date) >= 2019, vname=="iit")
+
+
+osrupdate %>%
+  filter(stabbr=="MA", name=="osr") %>%
+  filter(year >= 2017)
+
